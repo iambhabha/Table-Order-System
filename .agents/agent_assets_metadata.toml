@@ -1,0 +1,8 @@
+uploads = []
+outputs = []
+
+[[generated]]
+id = "ZYjJ9ShUMQyEbbJiktPuo"
+uri = "file://artifacts/restaurant-app/assets/images/icon.png"
+type = "image"
+title = "restaurant app icon"

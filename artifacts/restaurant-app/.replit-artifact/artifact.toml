@@ -1,0 +1,27 @@
+kind = "mobile"
+previewPath = "/"
+title = "Restaurant Table Order Manager"
+version = "1.0.0"
+id = "artifacts/restaurant-app"
+router = "expo-domain"
+
+[[integratedSkills]]
+name = "expo"
+version = "1.0.0"
+
+[[services]]
+ensurePreviewReachable = "/status"
+name = "expo"
+paths = [ "/" ]
+localPort = 23972
+
+[services.development]
+run = "pnpm --filter @workspace/restaurant-app run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/restaurant-app", "run", "build" ]
+run = [ "pnpm", "--filter", "@workspace/restaurant-app", "run", "serve" ]
+
+[services.env]
+PORT = "23972"
+BASE_PATH = "/"

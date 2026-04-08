@@ -1,7 +1,6 @@
 import { Feather } from "@expo/vector-icons";
 import React from "react";
 import {
-  Animated,
   Platform,
   StyleSheet,
   Text,
@@ -13,6 +12,7 @@ import { Table, TableStatus } from "@/context/RestaurantContext";
 
 interface TableCardProps {
   table: Table;
+  displayName: string;
   onPress: () => void;
   orderItemCount?: number;
   totalAmount?: number;
@@ -30,6 +30,7 @@ const STATUS_CONFIG: Record<
 
 export function TableCard({
   table,
+  displayName,
   onPress,
   orderItemCount,
   totalAmount,
@@ -61,9 +62,18 @@ export function TableCard({
       ]}
     >
       <View style={styles.header}>
-        <View style={styles.tableNumber}>
-          <Text style={[styles.numberText, { color: colors.foreground }]}>
-            {table.number}
+        <View
+          style={[
+            styles.tableNumber,
+            { backgroundColor: table.isCustom ? colors.accent + "20" : "#2C3E5015" },
+          ]}
+        >
+          <Text
+            style={[styles.numberText, { color: colors.foreground }]}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+          >
+            {displayName}
           </Text>
         </View>
         <View
@@ -72,7 +82,7 @@ export function TableCard({
             { backgroundColor: config.color + "20" },
           ]}
         >
-          <Feather name={config.icon} size={11} color={config.color} />
+          <Feather name={config.icon} size={10} color={config.color} />
           <Text style={[styles.statusText, { color: config.color }]}>
             {config.label}
           </Text>
@@ -81,14 +91,14 @@ export function TableCard({
 
       <View style={styles.info}>
         <View style={styles.infoRow}>
-          <Feather name="users" size={13} color={colors.mutedForeground} />
+          <Feather name="users" size={12} color={colors.mutedForeground} />
           <Text style={[styles.infoText, { color: colors.mutedForeground }]}>
             {table.capacity} seats
           </Text>
         </View>
         <View style={styles.infoRow}>
-          <Feather name="map-pin" size={13} color={colors.mutedForeground} />
-          <Text style={[styles.infoText, { color: colors.mutedForeground }]}>
+          <Feather name="map-pin" size={12} color={colors.mutedForeground} />
+          <Text style={[styles.infoText, { color: colors.mutedForeground }]} numberOfLines={1}>
             {table.location}
           </Text>
         </View>
@@ -117,59 +127,61 @@ export function TableCard({
 
 const styles = StyleSheet.create({
   card: {
-    borderRadius: 16,
+    borderRadius: 14,
     overflow: "hidden",
-    marginBottom: 12,
+    marginBottom: 10,
   },
   header: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    padding: 14,
-    paddingBottom: 10,
+    padding: 10,
+    paddingBottom: 6,
   },
   tableNumber: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
-    backgroundColor: "#2C3E5015",
+    minWidth: 38,
+    height: 38,
+    borderRadius: 10,
     alignItems: "center",
     justifyContent: "center",
+    paddingHorizontal: 6,
   },
   numberText: {
-    fontSize: 20,
+    fontSize: 14,
     fontFamily: "Inter_700Bold",
+    textAlign: "center",
   },
   statusBadge: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    gap: 3,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
     borderRadius: 20,
   },
   statusText: {
-    fontSize: 11,
+    fontSize: 10,
     fontFamily: "Inter_600SemiBold",
   },
   info: {
-    paddingHorizontal: 14,
-    paddingBottom: 12,
-    gap: 4,
+    paddingHorizontal: 10,
+    paddingBottom: 10,
+    gap: 3,
   },
   infoRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 5,
+    gap: 4,
   },
   infoText: {
-    fontSize: 12,
+    fontSize: 11,
     fontFamily: "Inter_400Regular",
+    flex: 1,
   },
   orderInfo: {
     borderTopWidth: 1,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
   },
   orderRow: {
     flexDirection: "row",
@@ -177,11 +189,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   orderLabel: {
-    fontSize: 12,
+    fontSize: 11,
     fontFamily: "Inter_400Regular",
   },
   orderAmount: {
-    fontSize: 14,
+    fontSize: 13,
     fontFamily: "Inter_700Bold",
   },
 });

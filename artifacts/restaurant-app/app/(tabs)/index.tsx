@@ -1,11 +1,16 @@
 import { Feather } from "@expo/vector-icons";
+import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
 import React, { useMemo, useState } from "react";
 import {
+  Alert,
   FlatList,
+  Modal,
   Platform,
+  ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
@@ -13,7 +18,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { TableCard } from "@/components/TableCard";
 import { useRestaurant } from "@/context/RestaurantContext";
 import { useColors } from "@/hooks/useColors";
-import { TableStatus } from "@/context/RestaurantContext";
+import { Table, TableStatus } from "@/context/RestaurantContext";
 
 const FILTERS: { label: string; value: TableStatus | "all" }[] = [
   { label: "All", value: "all" },
@@ -23,11 +28,24 @@ const FILTERS: { label: string; value: TableStatus | "all" }[] = [
   { label: "Cleaning", value: "cleaning" },
 ];
 
+const LOCATIONS = ["Window", "Center", "Bar", "Private", "Patio", "Outdoor", "VIP", "Other"];
+
 export default function TablesScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { tables, getTableOrder, getTotalAmount } = useRestaurant();
+  const { tables, getTableOrder, getTotalAmount, transferOrder, addTable, removeTable, getTableDisplayName } = useRestaurant();
   const [filter, setFilter] = useState<TableStatus | "all">("all");
+
+  // Transfer modal
+  const [showTransfer, setShowTransfer] = useState(false);
+  const [transferFrom, setTransferFrom] = useState<Table | null>(null);
+  const [transferTo, setTransferTo] = useState<Table | null>(null);
+
+  // Add table modal
+  const [showAddTable, setShowAddTable] = useState(false);
+  const [newLabel, setNewLabel] = useState("");
+  const [newCapacity, setNewCapacity] = useState("4");
+  const [newLocation, setNewLocation] = useState("Center");
 
   const stats = useMemo(() => {
     const available = tables.filter((t) => t.status === "available").length;
@@ -41,10 +59,41 @@ export default function TablesScreen() {
     return tables.filter((t) => t.status === filter);
   }, [tables, filter]);
 
+  const occupiedTables = useMemo(() => tables.filter((t) => t.status === "occupied"), [tables]);
+  const availableTables = useMemo(() => tables.filter((t) => t.status === "available"), [tables]);
+
   const topPad = Platform.OS === "web" ? Math.max(insets.top, 67) : insets.top;
+
+  const handleTransferConfirm = () => {
+    if (!transferFrom || !transferTo) return;
+    transferOrder(transferFrom.id, transferTo.id);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    setShowTransfer(false);
+    setTransferFrom(null);
+    setTransferTo(null);
+    Alert.alert(
+      "Transfer Complete",
+      `Order moved from ${getTableDisplayName(transferFrom)} to ${getTableDisplayName(transferTo)}.`
+    );
+  };
+
+  const handleAddTable = () => {
+    if (!newLabel.trim()) {
+      Alert.alert("Required", "Please enter a table name.");
+      return;
+    }
+    const cap = parseInt(newCapacity) || 4;
+    addTable(newLabel.trim(), cap, newLocation);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    setShowAddTable(false);
+    setNewLabel("");
+    setNewCapacity("4");
+    setNewLocation("Center");
+  };
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
+      {/* Header */}
       <View
         style={[
           styles.header,
@@ -55,14 +104,33 @@ export default function TablesScreen() {
           },
         ]}
       >
-        <Text style={[styles.headerTitle, { color: colors.foreground }]}>
-          Floor Plan
-        </Text>
-        <Text style={[styles.headerSub, { color: colors.mutedForeground }]}>
-          {stats.occupied} of {stats.total} occupied
-        </Text>
+        <View style={styles.headerLeft}>
+          <Text style={[styles.headerTitle, { color: colors.foreground }]}>
+            Floor Plan
+          </Text>
+          <Text style={[styles.headerSub, { color: colors.mutedForeground }]}>
+            {stats.occupied} of {stats.total} occupied
+          </Text>
+        </View>
+        <View style={styles.headerActions}>
+          <TouchableOpacity
+            onPress={() => setShowTransfer(true)}
+            style={[styles.headerBtn, { backgroundColor: colors.secondary + "18" }]}
+          >
+            <Feather name="shuffle" size={17} color={colors.secondary} />
+            <Text style={[styles.headerBtnText, { color: colors.secondary }]}>Transfer</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => setShowAddTable(true)}
+            style={[styles.headerBtn, { backgroundColor: colors.primary + "18" }]}
+          >
+            <Feather name="plus" size={17} color={colors.primary} />
+            <Text style={[styles.headerBtnText, { color: colors.primary }]}>Table</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
+      {/* Stats bar */}
       <View
         style={[
           styles.statsBar,
@@ -72,8 +140,10 @@ export default function TablesScreen() {
         <StatChip label="Available" value={stats.available} color="#27AE60" />
         <StatChip label="Occupied" value={stats.occupied} color="#C0392B" />
         <StatChip label="Reserved" value={stats.reserved} color="#2980B9" />
+        <StatChip label="Total" value={stats.total} color={colors.foreground} />
       </View>
 
+      {/* Filter bar */}
       <View
         style={[
           styles.filterBar,
@@ -115,10 +185,12 @@ export default function TablesScreen() {
         />
       </View>
 
+      {/* 3-column grid */}
       <FlatList
         data={filtered}
         keyExtractor={(item) => item.id}
-        numColumns={2}
+        numColumns={3}
+        key="3col"
         contentContainerStyle={[
           styles.grid,
           {
@@ -136,6 +208,7 @@ export default function TablesScreen() {
             <View style={styles.cardWrapper}>
               <TableCard
                 table={item}
+                displayName={getTableDisplayName(item)}
                 onPress={() =>
                   router.push({
                     pathname: "/table/[id]",
@@ -150,38 +223,246 @@ export default function TablesScreen() {
         }}
         ListEmptyComponent={
           <View style={styles.empty}>
-            <Feather
-              name="grid"
-              size={48}
-              color={colors.mutedForeground}
-              style={{ marginBottom: 12 }}
-            />
+            <Feather name="grid" size={40} color={colors.mutedForeground} style={{ marginBottom: 10 }} />
             <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>
               No tables match this filter
             </Text>
           </View>
         }
       />
+
+      {/* ── TRANSFER MODAL ── */}
+      <Modal
+        visible={showTransfer}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => { setShowTransfer(false); setTransferFrom(null); setTransferTo(null); }}
+      >
+        <View style={[styles.modal, { backgroundColor: colors.background }]}>
+          <View style={[styles.modalHeader, { borderBottomColor: colors.border }]}>
+            <TouchableOpacity onPress={() => { setShowTransfer(false); setTransferFrom(null); setTransferTo(null); }}>
+              <Feather name="x" size={22} color={colors.mutedForeground} />
+            </TouchableOpacity>
+            <Text style={[styles.modalTitle, { color: colors.foreground }]}>Transfer Order</Text>
+            <View style={{ width: 22 }} />
+          </View>
+
+          <ScrollView contentContainerStyle={styles.modalContent}>
+            {/* Step 1: Pick FROM table */}
+            <Text style={[styles.stepLabel, { color: colors.foreground }]}>
+              1. Select occupied table to transfer FROM
+            </Text>
+            {occupiedTables.length === 0 ? (
+              <Text style={[styles.hintText, { color: colors.mutedForeground }]}>
+                No occupied tables right now.
+              </Text>
+            ) : (
+              <View style={styles.tablePickerGrid}>
+                {occupiedTables.map((t) => {
+                  const selected = transferFrom?.id === t.id;
+                  return (
+                    <TouchableOpacity
+                      key={t.id}
+                      onPress={() => { setTransferFrom(t); setTransferTo(null); }}
+                      style={[
+                        styles.pickerChip,
+                        {
+                          backgroundColor: selected ? colors.primary : colors.card,
+                          borderColor: selected ? colors.primary : colors.border,
+                        },
+                      ]}
+                    >
+                      <Text style={[styles.pickerChipText, { color: selected ? "#fff" : colors.foreground }]}>
+                        {getTableDisplayName(t)}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            )}
+
+            {/* Step 2: Pick TO table */}
+            {transferFrom && (
+              <>
+                <View style={[styles.divider, { backgroundColor: colors.border }]} />
+                <Text style={[styles.stepLabel, { color: colors.foreground }]}>
+                  2. Select available table to transfer TO
+                </Text>
+                {availableTables.length === 0 ? (
+                  <Text style={[styles.hintText, { color: colors.mutedForeground }]}>
+                    No available tables right now.
+                  </Text>
+                ) : (
+                  <View style={styles.tablePickerGrid}>
+                    {availableTables.map((t) => {
+                      const selected = transferTo?.id === t.id;
+                      return (
+                        <TouchableOpacity
+                          key={t.id}
+                          onPress={() => setTransferTo(t)}
+                          style={[
+                            styles.pickerChip,
+                            {
+                              backgroundColor: selected ? "#27AE60" : colors.card,
+                              borderColor: selected ? "#27AE60" : colors.border,
+                            },
+                          ]}
+                        >
+                          <Text style={[styles.pickerChipText, { color: selected ? "#fff" : colors.foreground }]}>
+                            {getTableDisplayName(t)}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                )}
+              </>
+            )}
+
+            {/* Summary & confirm */}
+            {transferFrom && transferTo && (
+              <>
+                <View style={[styles.divider, { backgroundColor: colors.border }]} />
+                <View style={[styles.transferSummary, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                  <View style={styles.transferRow}>
+                    <View style={[styles.transferChip, { backgroundColor: colors.primary + "20" }]}>
+                      <Text style={[styles.transferChipText, { color: colors.primary }]}>
+                        {getTableDisplayName(transferFrom)}
+                      </Text>
+                    </View>
+                    <Feather name="arrow-right" size={20} color={colors.mutedForeground} />
+                    <View style={[styles.transferChip, { backgroundColor: "#27AE6020" }]}>
+                      <Text style={[styles.transferChipText, { color: "#27AE60" }]}>
+                        {getTableDisplayName(transferTo)}
+                      </Text>
+                    </View>
+                  </View>
+                  <Text style={[styles.transferNote, { color: colors.mutedForeground }]}>
+                    All items, pending orders, and customer details will be moved automatically.
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  onPress={handleTransferConfirm}
+                  style={[styles.confirmBtn, { backgroundColor: colors.primary }]}
+                  activeOpacity={0.85}
+                >
+                  <Feather name="shuffle" size={18} color="#fff" />
+                  <Text style={styles.confirmBtnText}>Confirm Transfer</Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </ScrollView>
+        </View>
+      </Modal>
+
+      {/* ── ADD TABLE MODAL ── */}
+      <Modal
+        visible={showAddTable}
+        animationType="slide"
+        presentationStyle="formSheet"
+        onRequestClose={() => setShowAddTable(false)}
+      >
+        <View style={[styles.modal, { backgroundColor: colors.background }]}>
+          <View style={[styles.modalHeader, { borderBottomColor: colors.border }]}>
+            <TouchableOpacity onPress={() => setShowAddTable(false)}>
+              <Feather name="x" size={22} color={colors.mutedForeground} />
+            </TouchableOpacity>
+            <Text style={[styles.modalTitle, { color: colors.foreground }]}>Add Custom Table</Text>
+            <View style={{ width: 22 }} />
+          </View>
+
+          <ScrollView contentContainerStyle={styles.modalContent} keyboardShouldPersistTaps="handled">
+            <Text style={[styles.inputLabel, { color: colors.foreground }]}>
+              Table Name / Label
+            </Text>
+            <TextInput
+              value={newLabel}
+              onChangeText={setNewLabel}
+              placeholder="e.g. P1, VIP, John's Party"
+              placeholderTextColor={colors.mutedForeground}
+              style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground }]}
+              autoFocus
+              maxLength={20}
+            />
+            <Text style={[styles.hint, { color: colors.mutedForeground }]}>
+              Use any name — table number, party name, room code, etc.
+            </Text>
+
+            <Text style={[styles.inputLabel, { color: colors.foreground, marginTop: 16 }]}>
+              Capacity (seats)
+            </Text>
+            <View style={styles.guestRow}>
+              {["2", "4", "6", "8", "10", "12"].map((n) => (
+                <TouchableOpacity
+                  key={n}
+                  onPress={() => setNewCapacity(n)}
+                  style={[
+                    styles.guestChip,
+                    {
+                      backgroundColor: newCapacity === n ? colors.primary : colors.muted,
+                      borderColor: newCapacity === n ? colors.primary : colors.border,
+                    },
+                  ]}
+                >
+                  <Text style={[styles.guestChipText, { color: newCapacity === n ? "#fff" : colors.foreground }]}>
+                    {n}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+              <TextInput
+                value={newCapacity}
+                onChangeText={setNewCapacity}
+                keyboardType="number-pad"
+                placeholder="+"
+                placeholderTextColor={colors.mutedForeground}
+                style={[styles.guestInput, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground }]}
+              />
+            </View>
+
+            <Text style={[styles.inputLabel, { color: colors.foreground, marginTop: 16 }]}>
+              Location
+            </Text>
+            <View style={styles.locationGrid}>
+              {LOCATIONS.map((loc) => (
+                <TouchableOpacity
+                  key={loc}
+                  onPress={() => setNewLocation(loc)}
+                  style={[
+                    styles.locationChip,
+                    {
+                      backgroundColor: newLocation === loc ? colors.secondary : colors.muted,
+                      borderColor: newLocation === loc ? colors.secondary : colors.border,
+                    },
+                  ]}
+                >
+                  <Text style={[styles.locationText, { color: newLocation === loc ? "#fff" : colors.mutedForeground }]}>
+                    {loc}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <TouchableOpacity
+              onPress={handleAddTable}
+              style={[styles.confirmBtn, { backgroundColor: colors.primary, marginTop: 28 }]}
+              activeOpacity={0.85}
+            >
+              <Feather name="plus" size={18} color="#fff" />
+              <Text style={styles.confirmBtnText}>Add Table</Text>
+            </TouchableOpacity>
+          </ScrollView>
+        </View>
+      </Modal>
     </View>
   );
 }
 
-function StatChip({
-  label,
-  value,
-  color,
-}: {
-  label: string;
-  value: number;
-  color: string;
-}) {
+function StatChip({ label, value, color }: { label: string; value: number; color: string }) {
   const colors = useColors();
   return (
     <View style={styles.stat}>
       <Text style={[styles.statValue, { color }]}>{value}</Text>
-      <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>
-        {label}
-      </Text>
+      <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>{label}</Text>
     </View>
   );
 }
@@ -189,43 +470,125 @@ function StatChip({
 const styles = StyleSheet.create({
   container: { flex: 1 },
   header: {
-    paddingHorizontal: 16,
-    paddingBottom: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 14,
+    paddingBottom: 10,
     borderBottomWidth: 1,
   },
-  headerTitle: {
-    fontSize: 26,
-    fontFamily: "Inter_700Bold",
-    marginBottom: 2,
+  headerLeft: { flex: 1 },
+  headerTitle: { fontSize: 22, fontFamily: "Inter_700Bold", marginBottom: 1 },
+  headerSub: { fontSize: 12, fontFamily: "Inter_400Regular" },
+  headerActions: { flexDirection: "row", gap: 8 },
+  headerBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 10,
   },
-  headerSub: {
-    fontSize: 13,
-    fontFamily: "Inter_400Regular",
-  },
+  headerBtnText: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
   statsBar: {
     flexDirection: "row",
-    paddingVertical: 12,
+    paddingVertical: 10,
     paddingHorizontal: 16,
     borderBottomWidth: 1,
-    gap: 24,
+    justifyContent: "space-around",
   },
   stat: { alignItems: "center" },
-  statValue: { fontSize: 22, fontFamily: "Inter_700Bold" },
-  statLabel: { fontSize: 11, fontFamily: "Inter_400Regular", marginTop: 2 },
-  filterBar: {
+  statValue: { fontSize: 20, fontFamily: "Inter_700Bold" },
+  statLabel: { fontSize: 10, fontFamily: "Inter_400Regular", marginTop: 1 },
+  filterBar: { borderBottomWidth: 1, paddingVertical: 8 },
+  filterList: { paddingHorizontal: 12, gap: 7 },
+  filterChip: { paddingHorizontal: 12, paddingVertical: 5, borderRadius: 20 },
+  filterText: { fontSize: 12, fontFamily: "Inter_500Medium" },
+  grid: { padding: 10, paddingTop: 12 },
+  row: { gap: 8, justifyContent: "flex-start" },
+  cardWrapper: { flex: 1 / 3 },
+  empty: { flex: 1, alignItems: "center", justifyContent: "center", paddingTop: 60 },
+  emptyText: { fontSize: 14, fontFamily: "Inter_400Regular" },
+  // Modal
+  modal: { flex: 1 },
+  modalHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingVertical: 14,
     borderBottomWidth: 1,
-    paddingVertical: 10,
   },
-  filterList: { paddingHorizontal: 16, gap: 8 },
-  filterChip: {
+  modalTitle: { fontSize: 16, fontFamily: "Inter_700Bold" },
+  modalContent: { padding: 20 },
+  stepLabel: { fontSize: 14, fontFamily: "Inter_700Bold", marginBottom: 12 },
+  hintText: { fontSize: 13, fontFamily: "Inter_400Regular", marginBottom: 12 },
+  tablePickerGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginBottom: 4 },
+  pickerChip: {
     paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: 20,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    minWidth: 72,
+    alignItems: "center",
   },
-  filterText: { fontSize: 13, fontFamily: "Inter_500Medium" },
-  grid: { padding: 12, paddingTop: 14 },
-  row: { gap: 12, justifyContent: "space-between" },
-  cardWrapper: { flex: 1 },
-  empty: { flex: 1, alignItems: "center", justifyContent: "center", paddingTop: 80 },
-  emptyText: { fontSize: 15, fontFamily: "Inter_400Regular" },
+  pickerChipText: { fontSize: 14, fontFamily: "Inter_700Bold" },
+  divider: { height: 1, marginVertical: 20 },
+  transferSummary: {
+    borderRadius: 12,
+    borderWidth: 1,
+    padding: 16,
+    marginBottom: 16,
+  },
+  transferRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 12, marginBottom: 10 },
+  transferChip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10 },
+  transferChipText: { fontSize: 15, fontFamily: "Inter_700Bold" },
+  transferNote: { fontSize: 12, fontFamily: "Inter_400Regular", textAlign: "center", lineHeight: 18 },
+  confirmBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 14,
+    borderRadius: 14,
+  },
+  confirmBtnText: { fontSize: 16, fontFamily: "Inter_700Bold", color: "#fff" },
+  // Add Table
+  inputLabel: { fontSize: 14, fontFamily: "Inter_600SemiBold", marginBottom: 8 },
+  input: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 16,
+    fontFamily: "Inter_400Regular",
+  },
+  hint: { fontSize: 11, fontFamily: "Inter_400Regular", marginTop: 6 },
+  guestRow: { flexDirection: "row", gap: 8, flexWrap: "wrap" },
+  guestChip: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  guestChipText: { fontSize: 15, fontFamily: "Inter_600SemiBold" },
+  guestInput: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    borderWidth: 1,
+    textAlign: "center",
+    fontSize: 15,
+    fontFamily: "Inter_600SemiBold",
+  },
+  locationGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  locationChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  locationText: { fontSize: 13, fontFamily: "Inter_500Medium" },
 });

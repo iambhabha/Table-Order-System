@@ -32,9 +32,9 @@ function timeAgo(dateStr: string) {
   return hrs === 1 ? "1 hr ago" : `${hrs} hrs ago`;
 }
 
-function OrderCard({ order, tableNumber, total, onPress }: {
+function OrderCard({ order, displayName, total, onPress }: {
   order: Order;
-  tableNumber: number;
+  displayName: string;
   total: number;
   onPress: () => void;
 }) {
@@ -55,7 +55,7 @@ function OrderCard({ order, tableNumber, total, onPress }: {
       <View style={styles.cardTop}>
         <View style={styles.tableInfo}>
           <Text style={[styles.tableNum, { color: colors.foreground }]}>
-            Table {tableNumber}
+            {displayName}
           </Text>
           <Text style={[styles.server, { color: colors.mutedForeground }]}>
             {order.serverName} · {order.guestCount} guests
@@ -104,7 +104,7 @@ function OrderCard({ order, tableNumber, total, onPress }: {
 export default function OrdersScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { orders, tables, getTotalAmount } = useRestaurant();
+  const { orders, tables, getTotalAmount, getTableDisplayName } = useRestaurant();
 
   const activeOrders = useMemo(
     () => orders.filter((o) => o.status !== "paid"),
@@ -152,7 +152,7 @@ export default function OrdersScreen() {
           return (
             <OrderCard
               order={item}
-              tableNumber={table?.number ?? 0}
+              displayName={table ? getTableDisplayName(table) : "Table"}
               total={getTotalAmount(item.id)}
               onPress={() =>
                 router.push({

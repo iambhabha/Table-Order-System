@@ -22,9 +22,9 @@ function formatDate(dateStr: string) {
   });
 }
 
-function HistoryCard({ order, tableNumber, total }: {
+function HistoryCard({ order, displayName, total }: {
   order: Order;
-  tableNumber: number;
+  displayName: string;
   total: number;
 }) {
   const colors = useColors();
@@ -38,7 +38,7 @@ function HistoryCard({ order, tableNumber, total }: {
       <View style={styles.row}>
         <View>
           <Text style={[styles.tableNum, { color: colors.foreground }]}>
-            Table {tableNumber}
+            {displayName}
           </Text>
           <Text style={[styles.meta, { color: colors.mutedForeground }]}>
             {order.serverName} · {order.guestCount} guests
@@ -68,7 +68,7 @@ function HistoryCard({ order, tableNumber, total }: {
 export default function HistoryScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { completedOrders, tables, getTotalAmount } = useRestaurant();
+  const { completedOrders, tables, getTotalAmount, getTableDisplayName } = useRestaurant();
 
   const totalRevenue = useMemo(
     () => completedOrders.reduce((sum, o) => sum + getTotalAmount(o.id), 0),
@@ -145,7 +145,7 @@ export default function HistoryScreen() {
           return (
             <HistoryCard
               order={item}
-              tableNumber={table?.number ?? 0}
+              displayName={table ? getTableDisplayName(table) : "Table"}
               total={getTotalAmount(item.id)}
             />
           );

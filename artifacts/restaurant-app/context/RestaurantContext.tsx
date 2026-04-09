@@ -373,29 +373,28 @@ export function RestaurantProvider({ children }: { children: React.ReactNode }) 
     const fromOrder = orders.find((o) => o.id === fromTable.currentOrderId);
     if (!fromOrder) return;
 
-    const kotItems = fromOrder.items.filter(
-      (i) => i.status === "pending" || i.status === "preparing"
-    );
-    const remainingItems = fromOrder.items.filter(
-      (i) => i.status !== "pending" && i.status !== "preparing"
-    );
+    // KOT = all active (non-paid) items regardless of kitchen status
+    const kotItems = fromOrder.items.filter((i) => i.status !== "paid");
+    const remainingItems = fromOrder.items.filter((i) => i.status === "paid");
 
     if (kotItems.length === 0) return;
 
+    const needsNewOrder = !toTable?.currentOrderId;
+    const newOrderId = needsNewOrder ? generateId() : null;
+
+    // Update orders first (pure state update, no side effects)
     setOrders((prev) => {
-      let updated = prev.map((o) => {
-        if (o.id !== fromOrder.id) return o;
-        return { ...o, items: remainingItems, updatedAt: new Date().toISOString() };
+      const base = prev.map((o) => {
+        if (o.id === fromOrder.id)
+          return { ...o, items: remainingItems, updatedAt: new Date().toISOString() };
+        if (!needsNewOrder && toTable?.currentOrderId && o.id === toTable.currentOrderId)
+          return { ...o, items: [...o.items, ...kotItems], updatedAt: new Date().toISOString() };
+        return o;
       });
 
-      if (toTable?.currentOrderId) {
-        updated = updated.map((o) => {
-          if (o.id !== toTable.currentOrderId) return o;
-          return { ...o, items: [...o.items, ...kotItems], updatedAt: new Date().toISOString() };
-        });
-      } else {
+      if (needsNewOrder) {
         const newOrder: Order = {
-          id: generateId(),
+          id: newOrderId!,
           tableId: toTableId,
           items: kotItems,
           createdAt: new Date().toISOString(),
@@ -405,26 +404,23 @@ export function RestaurantProvider({ children }: { children: React.ReactNode }) 
           guestCount: 0,
           customerMobile: "",
         };
-        updated = [...updated, newOrder];
-        setTables((prev) =>
-          prev.map((t) =>
-            t.id === toTableId
-              ? { ...t, status: "occupied" as TableStatus, currentOrderId: newOrder.id }
-              : t
-          )
-        );
+        return [...base, newOrder];
       }
-      return updated;
+      return base;
     });
 
+    // Update tables separately (never inside a setOrders callback)
+    setTables((prev) =>
+      prev.map((t) => {
+        if (t.id === fromTableId && remainingItems.length === 0)
+          return { ...t, status: "cleaning" as TableStatus, currentOrderId: null };
+        if (t.id === toTableId && needsNewOrder)
+          return { ...t, status: "occupied" as TableStatus, currentOrderId: newOrderId! };
+        return t;
+      })
+    );
+
     if (remainingItems.length === 0) {
-      setTables((prev) =>
-        prev.map((t) =>
-          t.id === fromTableId
-            ? { ...t, status: "cleaning" as TableStatus, currentOrderId: null }
-            : t
-        )
-      );
       setTimeout(() => {
         setTables((prev) =>
           prev.map((t) =>
@@ -451,20 +447,22 @@ export function RestaurantProvider({ children }: { children: React.ReactNode }) 
 
       if (selectedItems.length === 0) return;
 
+      const needsNewOrder = !toTable?.currentOrderId;
+      const newOrderId = needsNewOrder ? generateId() : null;
+
+      // Update orders (pure updater — no setTables calls inside)
       setOrders((prev) => {
-        let updated = prev.map((o) => {
-          if (o.id !== fromOrder.id) return o;
-          return { ...o, items: remainingItems, updatedAt: new Date().toISOString() };
+        const base = prev.map((o) => {
+          if (o.id === fromOrder.id)
+            return { ...o, items: remainingItems, updatedAt: new Date().toISOString() };
+          if (!needsNewOrder && toTable?.currentOrderId && o.id === toTable.currentOrderId)
+            return { ...o, items: [...o.items, ...selectedItems], updatedAt: new Date().toISOString() };
+          return o;
         });
 
-        if (toTable?.currentOrderId) {
-          updated = updated.map((o) => {
-            if (o.id !== toTable.currentOrderId) return o;
-            return { ...o, items: [...o.items, ...selectedItems], updatedAt: new Date().toISOString() };
-          });
-        } else {
+        if (needsNewOrder) {
           const newOrder: Order = {
-            id: generateId(),
+            id: newOrderId!,
             tableId: toTableId,
             items: selectedItems,
             createdAt: new Date().toISOString(),
@@ -474,26 +472,23 @@ export function RestaurantProvider({ children }: { children: React.ReactNode }) 
             guestCount: 0,
             customerMobile: "",
           };
-          updated = [...updated, newOrder];
-          setTables((prev) =>
-            prev.map((t) =>
-              t.id === toTableId
-                ? { ...t, status: "occupied" as TableStatus, currentOrderId: newOrder.id }
-                : t
-            )
-          );
+          return [...base, newOrder];
         }
-        return updated;
+        return base;
       });
 
+      // Update tables separately
+      setTables((prev) =>
+        prev.map((t) => {
+          if (t.id === fromTableId && remainingItems.length === 0)
+            return { ...t, status: "cleaning" as TableStatus, currentOrderId: null };
+          if (t.id === toTableId && needsNewOrder)
+            return { ...t, status: "occupied" as TableStatus, currentOrderId: newOrderId! };
+          return t;
+        })
+      );
+
       if (remainingItems.length === 0) {
-        setTables((prev) =>
-          prev.map((t) =>
-            t.id === fromTableId
-              ? { ...t, status: "cleaning" as TableStatus, currentOrderId: null }
-              : t
-          )
-        );
         setTimeout(() => {
           setTables((prev) =>
             prev.map((t) =>

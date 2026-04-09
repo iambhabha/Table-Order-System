@@ -231,9 +231,7 @@ export default function TableDetailScreen() {
   const displayName = getTableDisplayName(table);
   const total = order ? getTotalAmount(order.id) : 0;
 
-  const kotItems = order?.items.filter(
-    (i) => i.status === "pending" || i.status === "preparing"
-  ) ?? [];
+  const kotItems = order?.items.filter((i) => i.status !== "paid") ?? [];
 
   const transferTargetTables = selectedTransferType === "table"
     ? availableTables
@@ -752,11 +750,11 @@ export default function TableDetailScreen() {
                 <TransferTypeOption
                   icon="send"
                   title="KOT Transfer"
-                  subtitle={`Move pending/preparing kitchen items (${kotItems.length}) to another table`}
+                  subtitle={`Move all active order items (${kotItems.length}) to another table`}
                   color="#E67E22"
                   onPress={() => {
                     if (kotItems.length === 0) {
-                      Alert.alert("No KOT Items", "There are no pending or preparing items to transfer.");
+                      Alert.alert("No Active Items", "There are no active items to transfer via KOT.");
                       return;
                     }
                     setSelectedTransferType("kot");

@@ -1,7 +1,7 @@
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { router, useLocalSearchParams } from "expo-router";
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import {
   Alert,
   FlatList,
@@ -23,6 +23,15 @@ import { useColors } from "@/hooks/useColors";
 
 const CATEGORIES = ["Starters", "Mains", "Desserts", "Drinks"];
 
+type TransferType = "table" | "kot" | "items";
+
+const STATUS_CONFIG: Record<string, { color: string; bg: string }> = {
+  available: { color: "#27AE60", bg: "#27AE6022" },
+  occupied:  { color: "#C0392B", bg: "#C0392B22" },
+  reserved:  { color: "#2980B9", bg: "#2980B922" },
+  cleaning:  { color: "#F39C12", bg: "#F39C1222" },
+};
+
 export default function TableDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const colors = useColors();
@@ -36,12 +45,15 @@ export default function TableDetailScreen() {
     removeItemFromOrder,
     updateItemQuantity,
     updateItemStatus,
+    updateItemNotes,
     updateOrderStatus,
     updateTableStatus,
     closeTable,
     getTotalAmount,
     menu,
     transferOrder,
+    transferKOT,
+    transferItems,
     getTableDisplayName,
   } = useRestaurant();
 
@@ -50,21 +62,34 @@ export default function TableDetailScreen() {
 
   const [showMenu, setShowMenu] = useState(false);
   const [menuCategory, setMenuCategory] = useState("Starters");
+  const [menuSearch, setMenuSearch] = useState("");
+
   const [showStartModal, setShowStartModal] = useState(false);
   const [serverName, setServerName] = useState("");
   const [guestCount, setGuestCount] = useState("2");
   const [customerMobile, setCustomerMobile] = useState("");
 
-  // Transfer from this table
-  const [showTransfer, setShowTransfer] = useState(false);
+  const [showTransferTypeModal, setShowTransferTypeModal] = useState(false);
+  const [selectedTransferType, setSelectedTransferType] = useState<TransferType | null>(null);
   const [transferTo, setTransferTo] = useState<Table | null>(null);
+  const [selectedItemIndices, setSelectedItemIndices] = useState<number[]>([]);
 
   const topPad = Platform.OS === "web" ? Math.max(insets.top, 67) : insets.top;
   const bottomPad = Platform.OS === "web" ? Math.max(insets.bottom, 34) : insets.bottom;
 
-  const availableTables = tables.filter(
-    (t) => t.status === "available" && t.id !== id
-  );
+  const allTables = tables.filter((t) => t.id !== id);
+  const availableTables = tables.filter((t) => t.status === "available" && t.id !== id);
+  const anyTables = tables.filter((t) => t.id !== id && t.status !== "cleaning");
+
+  const filteredMenu = useMemo(() => {
+    if (menuSearch.trim()) {
+      return menu.filter((m) =>
+        m.name.toLowerCase().includes(menuSearch.trim().toLowerCase()) ||
+        m.description.toLowerCase().includes(menuSearch.trim().toLowerCase())
+      );
+    }
+    return menu.filter((m) => m.category === menuCategory);
+  }, [menu, menuSearch, menuCategory]);
 
   const handleStartOrder = useCallback(() => {
     if (!serverName.trim()) {
@@ -96,7 +121,6 @@ export default function TableDetailScreen() {
         { text: "Cancel", style: "cancel" },
         {
           text: "Confirm Payment",
-          style: "default",
           onPress: () => {
             updateOrderStatus(order.id, "paid");
             closeTable(table.id);
@@ -114,14 +138,41 @@ export default function TableDetailScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
   }, [table, updateTableStatus]);
 
-  const handleTransferConfirm = useCallback(() => {
-    if (!table || !transferTo) return;
-    transferOrder(table.id, transferTo.id);
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    setShowTransfer(false);
+  const resetTransferState = () => {
+    setShowTransferTypeModal(false);
+    setSelectedTransferType(null);
     setTransferTo(null);
-    router.back();
-  }, [table, transferTo, transferOrder]);
+    setSelectedItemIndices([]);
+  };
+
+  const handleTransferConfirm = useCallback(() => {
+    if (!table || !transferTo || !selectedTransferType) return;
+
+    if (selectedTransferType === "table") {
+      transferOrder(table.id, transferTo.id);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      resetTransferState();
+      router.back();
+    } else if (selectedTransferType === "kot") {
+      transferKOT(table.id, transferTo.id);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      resetTransferState();
+    } else if (selectedTransferType === "items") {
+      if (selectedItemIndices.length === 0) {
+        Alert.alert("No items selected", "Please select at least one item to transfer.");
+        return;
+      }
+      transferItems(table.id, transferTo.id, selectedItemIndices);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      resetTransferState();
+    }
+  }, [table, transferTo, selectedTransferType, selectedItemIndices, transferOrder, transferKOT, transferItems]);
+
+  const toggleItemSelection = (index: number) => {
+    setSelectedItemIndices((prev) =>
+      prev.includes(index) ? prev.filter((i) => i !== index) : [...prev, index]
+    );
+  };
 
   if (!table) {
     return (
@@ -133,7 +184,14 @@ export default function TableDetailScreen() {
 
   const displayName = getTableDisplayName(table);
   const total = order ? getTotalAmount(order.id) : 0;
-  const filteredMenu = menu.filter((m) => m.category === menuCategory);
+
+  const kotItems = order?.items.filter(
+    (i) => i.status === "pending" || i.status === "preparing"
+  ) ?? [];
+
+  const transferTargetTables = selectedTransferType === "table"
+    ? availableTables
+    : anyTables;
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -162,7 +220,7 @@ export default function TableDetailScreen() {
         <View style={styles.headerRight}>
           {table.status === "occupied" && (
             <TouchableOpacity
-              onPress={() => setShowTransfer(true)}
+              onPress={() => setShowTransferTypeModal(true)}
               style={[styles.headerIconBtn, { backgroundColor: colors.secondary + "18" }]}
             >
               <Feather name="shuffle" size={17} color={colors.secondary} />
@@ -273,6 +331,7 @@ export default function TableDetailScreen() {
                 onIncrement={() => updateItemQuantity(order.id, index, item.quantity + 1)}
                 onDecrement={() => updateItemQuantity(order.id, index, item.quantity - 1)}
                 onRemove={() => removeItemFromOrder(order.id, index)}
+                onNotesChange={(notes) => updateItemNotes(order.id, index, notes)}
                 onStatusChange={(status: OrderStatus) => updateItemStatus(order.id, index, status)}
               />
             )}
@@ -280,13 +339,12 @@ export default function TableDetailScreen() {
               <View style={styles.emptyOrder}>
                 <Feather name="shopping-cart" size={36} color={colors.mutedForeground} />
                 <Text style={[styles.emptyOrderText, { color: colors.mutedForeground }]}>
-                  No items yet. Add from menu below.
+                  No items yet. Tap Add Items below.
                 </Text>
               </View>
             }
           />
 
-          {/* Bottom Action Bar */}
           <View
             style={[
               styles.actionBar,
@@ -336,7 +394,6 @@ export default function TableDetailScreen() {
             </Text>
             <View style={{ width: 22 }} />
           </View>
-
           <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.modalContent} keyboardShouldPersistTaps="handled">
             <Text style={[styles.inputLabel, { color: colors.foreground }]}>Your Name (Server)</Text>
             <TextInput
@@ -347,9 +404,9 @@ export default function TableDetailScreen() {
               style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground }]}
               autoFocus
             />
-
             <Text style={[styles.inputLabel, { color: colors.foreground, marginTop: 16 }]}>
-              Customer Mobile Number <Text style={[styles.optionalLabel, { color: colors.mutedForeground }]}>(optional)</Text>
+              Customer Mobile{" "}
+              <Text style={[{ color: colors.mutedForeground, fontFamily: "Inter_400Regular", fontSize: 12 }]}>(optional)</Text>
             </Text>
             <TextInput
               value={customerMobile}
@@ -359,7 +416,6 @@ export default function TableDetailScreen() {
               keyboardType="phone-pad"
               style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground }]}
             />
-
             <Text style={[styles.inputLabel, { color: colors.foreground, marginTop: 16 }]}>Number of Guests</Text>
             <View style={styles.guestRow}>
               {["1", "2", "3", "4", "5", "6"].map((n) => (
@@ -388,7 +444,6 @@ export default function TableDetailScreen() {
                 style={[styles.guestInput, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground }]}
               />
             </View>
-
             <TouchableOpacity
               onPress={handleStartOrder}
               style={[styles.confirmBtn, { backgroundColor: colors.primary }]}
@@ -405,125 +460,311 @@ export default function TableDetailScreen() {
         visible={showMenu}
         animationType="slide"
         presentationStyle="pageSheet"
-        onRequestClose={() => setShowMenu(false)}
+        onRequestClose={() => { setShowMenu(false); setMenuSearch(""); }}
       >
         <View style={[styles.modalContainer, { backgroundColor: colors.background }]}>
           <View style={[styles.modalHeader, { borderBottomColor: colors.border }]}>
-            <TouchableOpacity onPress={() => setShowMenu(false)}>
+            <TouchableOpacity onPress={() => { setShowMenu(false); setMenuSearch(""); }}>
               <Feather name="x" size={22} color={colors.mutedForeground} />
             </TouchableOpacity>
             <Text style={[styles.modalTitle, { color: colors.foreground }]}>Add Items</Text>
             <View style={{ width: 22 }} />
           </View>
 
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            style={[styles.catScroll, { borderBottomColor: colors.border }]}
-            contentContainerStyle={styles.catList}
-          >
-            {CATEGORIES.map((cat) => (
-              <TouchableOpacity
-                key={cat}
-                onPress={() => setMenuCategory(cat)}
-                style={[
-                  styles.catChip,
-                  menuCategory === cat ? { backgroundColor: colors.primary } : { backgroundColor: colors.muted },
-                ]}
-              >
-                <Text style={[styles.catText, { color: menuCategory === cat ? "#fff" : colors.mutedForeground }]}>
-                  {cat}
-                </Text>
+          {/* Search bar */}
+          <View style={[styles.searchBar, { backgroundColor: colors.muted, borderBottomColor: colors.border }]}>
+            <Feather name="search" size={16} color={colors.mutedForeground} style={{ marginRight: 8 }} />
+            <TextInput
+              value={menuSearch}
+              onChangeText={setMenuSearch}
+              placeholder="Search items by name..."
+              placeholderTextColor={colors.mutedForeground}
+              style={[styles.searchInput, { color: colors.foreground }]}
+              returnKeyType="search"
+              clearButtonMode="while-editing"
+            />
+            {menuSearch.length > 0 && (
+              <TouchableOpacity onPress={() => setMenuSearch("")} style={{ padding: 4 }}>
+                <Feather name="x-circle" size={16} color={colors.mutedForeground} />
               </TouchableOpacity>
-            ))}
-          </ScrollView>
+            )}
+          </View>
+
+          {/* Category tabs — only show when not searching */}
+          {!menuSearch.trim() && (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={[styles.catScroll, { borderBottomColor: colors.border }]}
+              contentContainerStyle={styles.catList}
+            >
+              {CATEGORIES.map((cat) => (
+                <TouchableOpacity
+                  key={cat}
+                  onPress={() => setMenuCategory(cat)}
+                  style={[
+                    styles.catChip,
+                    menuCategory === cat ? { backgroundColor: colors.primary } : { backgroundColor: colors.muted },
+                  ]}
+                >
+                  <Text style={[styles.catText, { color: menuCategory === cat ? "#fff" : colors.mutedForeground }]}>
+                    {cat}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          )}
+
+          {menuSearch.trim() && (
+            <View style={[styles.searchResultsBar, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
+              <Text style={[styles.searchResultCount, { color: colors.mutedForeground }]}>
+                {filteredMenu.length} result{filteredMenu.length !== 1 ? "s" : ""} for "{menuSearch.trim()}"
+              </Text>
+            </View>
+          )}
 
           <FlatList
             data={filteredMenu}
             keyExtractor={(item) => item.id}
             contentContainerStyle={styles.menuList}
             renderItem={({ item }) => <MenuItemCard item={item} onAdd={handleAddItem} />}
+            ListEmptyComponent={
+              <View style={styles.emptyOrder}>
+                <Feather name="search" size={32} color={colors.mutedForeground} />
+                <Text style={[styles.emptyOrderText, { color: colors.mutedForeground }]}>
+                  No items match your search
+                </Text>
+              </View>
+            }
+            keyboardShouldPersistTaps="handled"
           />
         </View>
       </Modal>
 
-      {/* ── TRANSFER FROM THIS TABLE MODAL ── */}
+      {/* ── TRANSFER TYPE SELECTION MODAL ── */}
       <Modal
-        visible={showTransfer}
+        visible={showTransferTypeModal}
         animationType="slide"
-        presentationStyle="formSheet"
-        onRequestClose={() => { setShowTransfer(false); setTransferTo(null); }}
+        presentationStyle="pageSheet"
+        onRequestClose={resetTransferState}
       >
         <View style={[styles.modalContainer, { backgroundColor: colors.background }]}>
           <View style={[styles.modalHeader, { borderBottomColor: colors.border }]}>
-            <TouchableOpacity onPress={() => { setShowTransfer(false); setTransferTo(null); }}>
+            <TouchableOpacity onPress={resetTransferState}>
               <Feather name="x" size={22} color={colors.mutedForeground} />
             </TouchableOpacity>
             <Text style={[styles.modalTitle, { color: colors.foreground }]}>
-              Transfer from {displayName}
+              Transfer — {displayName}
             </Text>
             <View style={{ width: 22 }} />
           </View>
 
-          <ScrollView contentContainerStyle={styles.modalContent}>
-            <Text style={[styles.stepLabel, { color: colors.foreground }]}>
-              Select an available table to move this order to
-            </Text>
+          <ScrollView contentContainerStyle={styles.modalContent} keyboardShouldPersistTaps="handled">
 
-            {availableTables.length === 0 ? (
-              <Text style={[styles.hintText, { color: colors.mutedForeground }]}>
-                No available tables at the moment.
-              </Text>
-            ) : (
-              <View style={styles.tablePickerGrid}>
-                {availableTables.map((t) => {
-                  const selected = transferTo?.id === t.id;
+            {/* Step 1: Pick transfer type */}
+            {!selectedTransferType && (
+              <>
+                <Text style={[styles.stepLabel, { color: colors.foreground }]}>
+                  Select transfer type
+                </Text>
+                <TransferTypeOption
+                  icon="shuffle"
+                  title="Table Transfer"
+                  subtitle="Move entire order (all items) to another available table"
+                  color={colors.primary}
+                  onPress={() => setSelectedTransferType("table")}
+                />
+                <TransferTypeOption
+                  icon="send"
+                  title="KOT Transfer"
+                  subtitle={`Move pending/preparing kitchen items (${kotItems.length}) to another table`}
+                  color="#E67E22"
+                  onPress={() => {
+                    if (kotItems.length === 0) {
+                      Alert.alert("No KOT Items", "There are no pending or preparing items to transfer.");
+                      return;
+                    }
+                    setSelectedTransferType("kot");
+                  }}
+                  disabled={kotItems.length === 0}
+                />
+                <TransferTypeOption
+                  icon="list"
+                  title="Item Transfer"
+                  subtitle="Select specific items to move to another table"
+                  color="#27AE60"
+                  onPress={() => setSelectedTransferType("items")}
+                />
+              </>
+            )}
+
+            {/* Step 2 for "items": pick items */}
+            {selectedTransferType === "items" && !transferTo && (
+              <>
+                <TouchableOpacity onPress={() => setSelectedTransferType(null)} style={styles.backRow}>
+                  <Feather name="arrow-left" size={14} color={colors.mutedForeground} />
+                  <Text style={[styles.backRowText, { color: colors.mutedForeground }]}>Change type</Text>
+                </TouchableOpacity>
+                <Text style={[styles.stepLabel, { color: colors.foreground }]}>
+                  Select items to transfer
+                </Text>
+                {order?.items.map((item, index) => {
+                  const selected = selectedItemIndices.includes(index);
                   return (
                     <TouchableOpacity
-                      key={t.id}
-                      onPress={() => setTransferTo(t)}
+                      key={index}
+                      onPress={() => toggleItemSelection(index)}
                       style={[
-                        styles.pickerChip,
+                        styles.itemPickerRow,
                         {
-                          backgroundColor: selected ? "#27AE60" : colors.card,
+                          backgroundColor: selected ? "#27AE6018" : colors.card,
                           borderColor: selected ? "#27AE60" : colors.border,
                         },
                       ]}
                     >
-                      <Text style={[styles.pickerChipText, { color: selected ? "#fff" : colors.foreground }]}>
-                        {getTableDisplayName(t)}
-                      </Text>
-                      <Text style={[styles.pickerChipSub, { color: selected ? "#ffffffaa" : colors.mutedForeground }]}>
-                        {t.capacity} seats
-                      </Text>
+                      <View style={[styles.checkbox, { borderColor: selected ? "#27AE60" : colors.border, backgroundColor: selected ? "#27AE60" : "transparent" }]}>
+                        {selected && <Feather name="check" size={12} color="#fff" />}
+                      </View>
+                      <Text style={[styles.itemPickerEmoji]}>{item.menuItem.emoji}</Text>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.itemPickerName, { color: colors.foreground }]}>
+                          {item.menuItem.name}
+                        </Text>
+                        <Text style={[styles.itemPickerMeta, { color: colors.mutedForeground }]}>
+                          x{item.quantity} · ${(item.menuItem.price * item.quantity).toFixed(2)}
+                        </Text>
+                      </View>
                     </TouchableOpacity>
                   );
                 })}
-              </View>
+                {selectedItemIndices.length > 0 && (
+                  <TouchableOpacity
+                    onPress={() => {
+                      // proceed to table selection step
+                      setTransferTo(null);
+                    }}
+                    style={[styles.confirmBtn, { backgroundColor: "#27AE60", marginTop: 20 }]}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={styles.confirmBtnText}>
+                      Select Destination Table ({selectedItemIndices.length} items)
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </>
             )}
 
-            {transferTo && (
+            {/* Step 2 for table/kot: pick target table */}
+            {selectedTransferType && (selectedTransferType !== "items" || (selectedTransferType === "items" && selectedItemIndices.length > 0)) && !transferTo && selectedTransferType !== "items" && (
               <>
-                <View style={[styles.transferSummary, { backgroundColor: colors.card, borderColor: colors.border, marginTop: 20 }]}>
+                <TouchableOpacity onPress={() => setSelectedTransferType(null)} style={styles.backRow}>
+                  <Feather name="arrow-left" size={14} color={colors.mutedForeground} />
+                  <Text style={[styles.backRowText, { color: colors.mutedForeground }]}>Change type</Text>
+                </TouchableOpacity>
+                <Text style={[styles.stepLabel, { color: colors.foreground }]}>
+                  Select destination table
+                </Text>
+                {transferTargetTables.length === 0 ? (
+                  <Text style={[styles.hintText, { color: colors.mutedForeground }]}>No available tables.</Text>
+                ) : (
+                  <View style={styles.tablePickerGrid}>
+                    {transferTargetTables.map((t) => {
+                      const sc = STATUS_CONFIG[t.status];
+                      return (
+                        <TouchableOpacity
+                          key={t.id}
+                          onPress={() => setTransferTo(t)}
+                          style={[
+                            styles.pickerChip,
+                            { backgroundColor: sc.bg, borderColor: sc.color + "88" },
+                          ]}
+                        >
+                          <Text style={[styles.pickerChipText, { color: sc.color }]}>
+                            {getTableDisplayName(t)}
+                          </Text>
+                          <Text style={[styles.pickerChipSub, { color: sc.color + "99" }]}>
+                            {t.status}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                )}
+              </>
+            )}
+
+            {/* Item transfer: table picker step */}
+            {selectedTransferType === "items" && selectedItemIndices.length > 0 && !transferTo && (
+              <>
+                <TouchableOpacity onPress={() => setSelectedItemIndices([])} style={styles.backRow}>
+                  <Feather name="arrow-left" size={14} color={colors.mutedForeground} />
+                  <Text style={[styles.backRowText, { color: colors.mutedForeground }]}>Change items</Text>
+                </TouchableOpacity>
+                <Text style={[styles.stepLabel, { color: colors.foreground }]}>
+                  Select destination table
+                </Text>
+                {anyTables.length === 0 ? (
+                  <Text style={[styles.hintText, { color: colors.mutedForeground }]}>No tables available.</Text>
+                ) : (
+                  <View style={styles.tablePickerGrid}>
+                    {anyTables.map((t) => {
+                      const sc = STATUS_CONFIG[t.status] ?? { color: "#888", bg: "#88888822" };
+                      return (
+                        <TouchableOpacity
+                          key={t.id}
+                          onPress={() => setTransferTo(t)}
+                          style={[
+                            styles.pickerChip,
+                            { backgroundColor: sc.bg, borderColor: sc.color + "88" },
+                          ]}
+                        >
+                          <Text style={[styles.pickerChipText, { color: sc.color }]}>
+                            {getTableDisplayName(t)}
+                          </Text>
+                          <Text style={[styles.pickerChipSub, { color: sc.color + "99" }]}>
+                            {t.status}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                )}
+              </>
+            )}
+
+            {/* Step 3: Confirm */}
+            {selectedTransferType && transferTo && (
+              <>
+                <TouchableOpacity onPress={() => setTransferTo(null)} style={styles.backRow}>
+                  <Feather name="arrow-left" size={14} color={colors.mutedForeground} />
+                  <Text style={[styles.backRowText, { color: colors.mutedForeground }]}>Change table</Text>
+                </TouchableOpacity>
+
+                <View style={[styles.transferSummary, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                  <Text style={[styles.summaryLabel, { color: colors.mutedForeground }]}>
+                    {selectedTransferType === "table" && "Table Transfer"}
+                    {selectedTransferType === "kot" && `KOT Transfer · ${kotItems.length} items`}
+                    {selectedTransferType === "items" && `Item Transfer · ${selectedItemIndices.length} item${selectedItemIndices.length !== 1 ? "s" : ""}`}
+                  </Text>
                   <View style={styles.transferRow}>
                     <View style={[styles.transferChip, { backgroundColor: colors.primary + "20" }]}>
                       <Text style={[styles.transferChipText, { color: colors.primary }]}>{displayName}</Text>
                     </View>
                     <Feather name="arrow-right" size={20} color={colors.mutedForeground} />
-                    <View style={[styles.transferChip, { backgroundColor: "#27AE6020" }]}>
-                      <Text style={[styles.transferChipText, { color: "#27AE60" }]}>{getTableDisplayName(transferTo)}</Text>
+                    <View style={[styles.transferChip, { backgroundColor: STATUS_CONFIG[transferTo.status]?.bg ?? "#88888822" }]}>
+                      <Text style={[styles.transferChipText, { color: STATUS_CONFIG[transferTo.status]?.color ?? "#888" }]}>
+                        {getTableDisplayName(transferTo)}
+                      </Text>
                     </View>
                   </View>
-                  <Text style={[styles.transferNote, { color: colors.mutedForeground }]}>
-                    All items, pending orders, and customer details will be moved automatically.
-                  </Text>
                 </View>
+
                 <TouchableOpacity
                   onPress={handleTransferConfirm}
-                  style={[styles.confirmBtn, { backgroundColor: colors.primary, marginTop: 16 }]}
+                  style={[styles.confirmBtn, { backgroundColor: colors.primary }]}
                   activeOpacity={0.85}
                 >
-                  <Feather name="shuffle" size={18} color="#fff" />
+                  <Feather name="check" size={18} color="#fff" />
                   <Text style={styles.confirmBtnText}>Confirm Transfer</Text>
                 </TouchableOpacity>
               </>
@@ -532,6 +773,52 @@ export default function TableDetailScreen() {
         </View>
       </Modal>
     </View>
+  );
+}
+
+function TransferTypeOption({
+  icon,
+  title,
+  subtitle,
+  color,
+  onPress,
+  disabled,
+}: {
+  icon: keyof typeof Feather.glyphMap;
+  title: string;
+  subtitle: string;
+  color: string;
+  onPress: () => void;
+  disabled?: boolean;
+}) {
+  const colors = useColors();
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      disabled={disabled}
+      activeOpacity={0.8}
+      style={[
+        styles.transferTypeCard,
+        {
+          backgroundColor: disabled ? colors.muted : color + "12",
+          borderColor: disabled ? colors.border : color + "55",
+          opacity: disabled ? 0.5 : 1,
+        },
+      ]}
+    >
+      <View style={[styles.transferTypeIcon, { backgroundColor: color + "20" }]}>
+        <Feather name={icon} size={22} color={color} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={[styles.transferTypeTitle, { color: disabled ? colors.mutedForeground : colors.foreground }]}>
+          {title}
+        </Text>
+        <Text style={[styles.transferTypeSub, { color: colors.mutedForeground }]}>
+          {subtitle}
+        </Text>
+      </View>
+      {!disabled && <Feather name="chevron-right" size={18} color={color} />}
+    </TouchableOpacity>
   );
 }
 
@@ -629,7 +916,6 @@ const styles = StyleSheet.create({
     borderRadius: 14,
   },
   payBtnText: { fontSize: 15, fontFamily: "Inter_600SemiBold" },
-  // Modals
   modalContainer: { flex: 1 },
   modalHeader: {
     flexDirection: "row",
@@ -640,9 +926,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
   },
   modalTitle: { fontSize: 16, fontFamily: "Inter_700Bold" },
-  modalContent: { padding: 20 },
+  modalContent: { padding: 20, paddingBottom: 40 },
   inputLabel: { fontSize: 14, fontFamily: "Inter_600SemiBold", marginBottom: 8 },
-  optionalLabel: { fontSize: 12, fontFamily: "Inter_400Regular" },
   input: {
     borderWidth: 1,
     borderRadius: 12,
@@ -680,14 +965,57 @@ const styles = StyleSheet.create({
     marginTop: 28,
   },
   confirmBtnText: { fontSize: 16, fontFamily: "Inter_700Bold", color: "#fff" },
+  // Menu
+  searchBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 15,
+    fontFamily: "Inter_400Regular",
+    paddingVertical: 0,
+  },
+  searchResultsBar: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+  },
+  searchResultCount: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+  },
   catScroll: { borderBottomWidth: 1, paddingVertical: 10 },
   catList: { paddingHorizontal: 16, gap: 8 },
   catChip: { paddingHorizontal: 16, paddingVertical: 7, borderRadius: 20 },
   catText: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
   menuList: { padding: 16 },
   // Transfer
-  stepLabel: { fontSize: 14, fontFamily: "Inter_700Bold", marginBottom: 14 },
+  stepLabel: { fontSize: 14, fontFamily: "Inter_700Bold", marginBottom: 16 },
   hintText: { fontSize: 13, fontFamily: "Inter_400Regular" },
+  backRow: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 16 },
+  backRowText: { fontSize: 13, fontFamily: "Inter_500Medium" },
+  transferTypeCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    padding: 16,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    marginBottom: 12,
+  },
+  transferTypeIcon: {
+    width: 46,
+    height: 46,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  transferTypeTitle: { fontSize: 15, fontFamily: "Inter_700Bold", marginBottom: 2 },
+  transferTypeSub: { fontSize: 12, fontFamily: "Inter_400Regular", lineHeight: 17 },
   tablePickerGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
   pickerChip: {
     paddingHorizontal: 14,
@@ -698,14 +1026,41 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   pickerChipText: { fontSize: 14, fontFamily: "Inter_700Bold" },
-  pickerChipSub: { fontSize: 11, fontFamily: "Inter_400Regular", marginTop: 2 },
+  pickerChipSub: { fontSize: 10, fontFamily: "Inter_400Regular", marginTop: 2, textTransform: "capitalize" },
+  itemPickerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    marginBottom: 8,
+  },
+  checkbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    borderWidth: 2,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  itemPickerEmoji: { fontSize: 22 },
+  itemPickerName: { fontSize: 14, fontFamily: "Inter_600SemiBold" },
+  itemPickerMeta: { fontSize: 12, fontFamily: "Inter_400Regular", marginTop: 2 },
   transferSummary: {
     borderRadius: 12,
     borderWidth: 1,
     padding: 16,
+    marginBottom: 4,
+    gap: 12,
   },
-  transferRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 12, marginBottom: 10 },
+  summaryLabel: { fontSize: 12, fontFamily: "Inter_600SemiBold", textTransform: "uppercase", letterSpacing: 0.5 },
+  transferRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 12,
+  },
   transferChip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10 },
   transferChipText: { fontSize: 15, fontFamily: "Inter_700Bold" },
-  transferNote: { fontSize: 12, fontFamily: "Inter_400Regular", textAlign: "center", lineHeight: 18 },
 });

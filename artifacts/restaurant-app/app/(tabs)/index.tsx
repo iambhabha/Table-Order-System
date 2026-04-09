@@ -20,6 +20,15 @@ import { useRestaurant } from "@/context/RestaurantContext";
 import { useColors } from "@/hooks/useColors";
 import { Table, TableStatus } from "@/context/RestaurantContext";
 
+type TransferType = "table" | "kot" | "items";
+
+const STATUS_CONFIG_FLOOR: Record<string, { color: string; bg: string }> = {
+  available: { color: "#27AE60", bg: "#27AE6022" },
+  occupied:  { color: "#C0392B", bg: "#C0392B22" },
+  reserved:  { color: "#2980B9", bg: "#2980B922" },
+  cleaning:  { color: "#F39C12", bg: "#F39C1222" },
+};
+
 const FILTERS: { label: string; value: TableStatus | "all" }[] = [
   { label: "All", value: "all" },
   { label: "Available", value: "available" },
@@ -33,12 +42,13 @@ const LOCATIONS = ["Window", "Center", "Bar", "Private", "Patio", "Outdoor", "VI
 export default function TablesScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { tables, getTableOrder, getTotalAmount, transferOrder, addTable, removeTable, getTableDisplayName } = useRestaurant();
+  const { tables, getTableOrder, getTotalAmount, transferOrder, transferKOT, addTable, removeTable, getTableDisplayName } = useRestaurant();
   const [filter, setFilter] = useState<TableStatus | "all">("all");
 
   // Transfer modal
   const [showTransfer, setShowTransfer] = useState(false);
   const [transferFrom, setTransferFrom] = useState<Table | null>(null);
+  const [transferType, setTransferType] = useState<TransferType | null>(null);
   const [transferTo, setTransferTo] = useState<Table | null>(null);
 
   // Add table modal
@@ -64,16 +74,25 @@ export default function TablesScreen() {
 
   const topPad = Platform.OS === "web" ? Math.max(insets.top, 67) : insets.top;
 
-  const handleTransferConfirm = () => {
-    if (!transferFrom || !transferTo) return;
-    transferOrder(transferFrom.id, transferTo.id);
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+  const resetTransfer = () => {
     setShowTransfer(false);
     setTransferFrom(null);
+    setTransferType(null);
     setTransferTo(null);
+  };
+
+  const handleTransferConfirm = () => {
+    if (!transferFrom || !transferTo || !transferType) return;
+    if (transferType === "table") {
+      transferOrder(transferFrom.id, transferTo.id);
+    } else if (transferType === "kot") {
+      transferKOT(transferFrom.id, transferTo.id);
+    }
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    resetTransfer();
     Alert.alert(
       "Transfer Complete",
-      `Order moved from ${getTableDisplayName(transferFrom)} to ${getTableDisplayName(transferTo)}.`
+      `Transfer done from ${getTableDisplayName(transferFrom)} to ${getTableDisplayName(transferTo)}.`
     );
   };
 
@@ -236,11 +255,11 @@ export default function TablesScreen() {
         visible={showTransfer}
         animationType="slide"
         presentationStyle="pageSheet"
-        onRequestClose={() => { setShowTransfer(false); setTransferFrom(null); setTransferTo(null); }}
+        onRequestClose={resetTransfer}
       >
         <View style={[styles.modal, { backgroundColor: colors.background }]}>
           <View style={[styles.modalHeader, { borderBottomColor: colors.border }]}>
-            <TouchableOpacity onPress={() => { setShowTransfer(false); setTransferFrom(null); setTransferTo(null); }}>
+            <TouchableOpacity onPress={resetTransfer}>
               <Feather name="x" size={22} color={colors.mutedForeground} />
             </TouchableOpacity>
             <Text style={[styles.modalTitle, { color: colors.foreground }]}>Transfer Order</Text>
@@ -249,66 +268,26 @@ export default function TablesScreen() {
 
           <ScrollView contentContainerStyle={styles.modalContent}>
             {/* Step 1: Pick FROM table */}
-            <Text style={[styles.stepLabel, { color: colors.foreground }]}>
-              1. Select occupied table to transfer FROM
-            </Text>
-            {occupiedTables.length === 0 ? (
-              <Text style={[styles.hintText, { color: colors.mutedForeground }]}>
-                No occupied tables right now.
-              </Text>
-            ) : (
-              <View style={styles.tablePickerGrid}>
-                {occupiedTables.map((t) => {
-                  const selected = transferFrom?.id === t.id;
-                  return (
-                    <TouchableOpacity
-                      key={t.id}
-                      onPress={() => { setTransferFrom(t); setTransferTo(null); }}
-                      style={[
-                        styles.pickerChip,
-                        {
-                          backgroundColor: selected ? colors.primary : colors.card,
-                          borderColor: selected ? colors.primary : colors.border,
-                        },
-                      ]}
-                    >
-                      <Text style={[styles.pickerChipText, { color: selected ? "#fff" : colors.foreground }]}>
-                        {getTableDisplayName(t)}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            )}
-
-            {/* Step 2: Pick TO table */}
-            {transferFrom && (
+            {!transferFrom && (
               <>
-                <View style={[styles.divider, { backgroundColor: colors.border }]} />
                 <Text style={[styles.stepLabel, { color: colors.foreground }]}>
-                  2. Select available table to transfer TO
+                  Select occupied table to transfer FROM
                 </Text>
-                {availableTables.length === 0 ? (
+                {occupiedTables.length === 0 ? (
                   <Text style={[styles.hintText, { color: colors.mutedForeground }]}>
-                    No available tables right now.
+                    No occupied tables right now.
                   </Text>
                 ) : (
                   <View style={styles.tablePickerGrid}>
-                    {availableTables.map((t) => {
-                      const selected = transferTo?.id === t.id;
+                    {occupiedTables.map((t) => {
+                      const sc = STATUS_CONFIG_FLOOR[t.status];
                       return (
                         <TouchableOpacity
                           key={t.id}
-                          onPress={() => setTransferTo(t)}
-                          style={[
-                            styles.pickerChip,
-                            {
-                              backgroundColor: selected ? "#27AE60" : colors.card,
-                              borderColor: selected ? "#27AE60" : colors.border,
-                            },
-                          ]}
+                          onPress={() => { setTransferFrom(t); setTransferType(null); setTransferTo(null); }}
+                          style={[styles.pickerChip, { backgroundColor: sc.bg, borderColor: sc.color + "88" }]}
                         >
-                          <Text style={[styles.pickerChipText, { color: selected ? "#fff" : colors.foreground }]}>
+                          <Text style={[styles.pickerChipText, { color: sc.color }]}>
                             {getTableDisplayName(t)}
                           </Text>
                         </TouchableOpacity>
@@ -319,34 +298,113 @@ export default function TablesScreen() {
               </>
             )}
 
-            {/* Summary & confirm */}
-            {transferFrom && transferTo && (
+            {/* Step 2: Pick transfer TYPE */}
+            {transferFrom && !transferType && (
               <>
-                <View style={[styles.divider, { backgroundColor: colors.border }]} />
+                <TouchableOpacity onPress={() => setTransferFrom(null)} style={styles.backRow}>
+                  <Feather name="arrow-left" size={14} color={colors.mutedForeground} />
+                  <Text style={[styles.backRowText, { color: colors.mutedForeground }]}>Change table</Text>
+                </TouchableOpacity>
+                <Text style={[styles.stepLabel, { color: colors.foreground }]}>
+                  Select transfer type for {getTableDisplayName(transferFrom)}
+                </Text>
+                {[
+                  { type: "table" as TransferType, icon: "shuffle" as const, title: "Table Transfer", sub: "Move the entire order to another table", color: colors.primary },
+                  { type: "kot" as TransferType, icon: "send" as const, title: "KOT Transfer", sub: "Move pending kitchen items to another table", color: "#E67E22" },
+                  { type: "items" as TransferType, icon: "list" as const, title: "Item Transfer", sub: "Go to table to select specific items", color: "#27AE60" },
+                ].map((opt) => (
+                  <TouchableOpacity
+                    key={opt.type}
+                    onPress={() => {
+                      if (opt.type === "items") {
+                        Alert.alert("Item Transfer", "Open the table directly and use the shuffle icon to select specific items.");
+                        return;
+                      }
+                      setTransferType(opt.type);
+                    }}
+                    style={[styles.transferTypeCard, { backgroundColor: opt.color + "12", borderColor: opt.color + "55" }]}
+                    activeOpacity={0.8}
+                  >
+                    <View style={[styles.transferTypeIcon, { backgroundColor: opt.color + "20" }]}>
+                      <Feather name={opt.icon} size={20} color={opt.color} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.transferTypeTitle, { color: colors.foreground }]}>{opt.title}</Text>
+                      <Text style={[styles.transferTypeSub, { color: colors.mutedForeground }]}>{opt.sub}</Text>
+                    </View>
+                    <Feather name="chevron-right" size={16} color={opt.color} />
+                  </TouchableOpacity>
+                ))}
+              </>
+            )}
+
+            {/* Step 3: Pick TO table */}
+            {transferFrom && transferType && !transferTo && (
+              <>
+                <TouchableOpacity onPress={() => setTransferType(null)} style={styles.backRow}>
+                  <Feather name="arrow-left" size={14} color={colors.mutedForeground} />
+                  <Text style={[styles.backRowText, { color: colors.mutedForeground }]}>Change type</Text>
+                </TouchableOpacity>
+                <Text style={[styles.stepLabel, { color: colors.foreground }]}>
+                  Select destination table
+                </Text>
+                {(transferType === "table" ? availableTables : tables.filter(t => t.id !== transferFrom.id && t.status !== "cleaning")).length === 0 ? (
+                  <Text style={[styles.hintText, { color: colors.mutedForeground }]}>No tables available.</Text>
+                ) : (
+                  <View style={styles.tablePickerGrid}>
+                    {(transferType === "table" ? availableTables : tables.filter(t => t.id !== transferFrom.id && t.status !== "cleaning")).map((t) => {
+                      const sc = STATUS_CONFIG_FLOOR[t.status];
+                      return (
+                        <TouchableOpacity
+                          key={t.id}
+                          onPress={() => setTransferTo(t)}
+                          style={[styles.pickerChip, { backgroundColor: sc.bg, borderColor: sc.color + "88" }]}
+                        >
+                          <Text style={[styles.pickerChipText, { color: sc.color }]}>
+                            {getTableDisplayName(t)}
+                          </Text>
+                          <Text style={[styles.pickerChipSub, { color: sc.color + "99" }]}>
+                            {t.status}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                )}
+              </>
+            )}
+
+            {/* Step 4: Confirm */}
+            {transferFrom && transferType && transferTo && (
+              <>
+                <TouchableOpacity onPress={() => setTransferTo(null)} style={styles.backRow}>
+                  <Feather name="arrow-left" size={14} color={colors.mutedForeground} />
+                  <Text style={[styles.backRowText, { color: colors.mutedForeground }]}>Change table</Text>
+                </TouchableOpacity>
                 <View style={[styles.transferSummary, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                  <Text style={[styles.summaryTypeLabel, { color: colors.mutedForeground }]}>
+                    {transferType === "table" ? "Table Transfer" : "KOT Transfer"}
+                  </Text>
                   <View style={styles.transferRow}>
-                    <View style={[styles.transferChip, { backgroundColor: colors.primary + "20" }]}>
-                      <Text style={[styles.transferChipText, { color: colors.primary }]}>
+                    <View style={[styles.transferChip, { backgroundColor: "#C0392B20" }]}>
+                      <Text style={[styles.transferChipText, { color: "#C0392B" }]}>
                         {getTableDisplayName(transferFrom)}
                       </Text>
                     </View>
                     <Feather name="arrow-right" size={20} color={colors.mutedForeground} />
-                    <View style={[styles.transferChip, { backgroundColor: "#27AE6020" }]}>
-                      <Text style={[styles.transferChipText, { color: "#27AE60" }]}>
+                    <View style={[styles.transferChip, { backgroundColor: STATUS_CONFIG_FLOOR[transferTo.status]?.bg }]}>
+                      <Text style={[styles.transferChipText, { color: STATUS_CONFIG_FLOOR[transferTo.status]?.color }]}>
                         {getTableDisplayName(transferTo)}
                       </Text>
                     </View>
                   </View>
-                  <Text style={[styles.transferNote, { color: colors.mutedForeground }]}>
-                    All items, pending orders, and customer details will be moved automatically.
-                  </Text>
                 </View>
                 <TouchableOpacity
                   onPress={handleTransferConfirm}
                   style={[styles.confirmBtn, { backgroundColor: colors.primary }]}
                   activeOpacity={0.85}
                 >
-                  <Feather name="shuffle" size={18} color="#fff" />
+                  <Feather name="check" size={18} color="#fff" />
                   <Text style={styles.confirmBtnText}>Confirm Transfer</Text>
                 </TouchableOpacity>
               </>
@@ -543,6 +601,22 @@ const styles = StyleSheet.create({
   transferRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 12, marginBottom: 10 },
   transferChip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10 },
   transferChipText: { fontSize: 15, fontFamily: "Inter_700Bold" },
+  backRow: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 16 },
+  backRowText: { fontSize: 13, fontFamily: "Inter_500Medium" },
+  summaryTypeLabel: { fontSize: 11, fontFamily: "Inter_600SemiBold", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 10 },
+  transferTypeCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    padding: 14,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    marginBottom: 10,
+  },
+  transferTypeIcon: { width: 42, height: 42, borderRadius: 11, alignItems: "center", justifyContent: "center" },
+  transferTypeTitle: { fontSize: 14, fontFamily: "Inter_700Bold", marginBottom: 2 },
+  transferTypeSub: { fontSize: 11, fontFamily: "Inter_400Regular", lineHeight: 16 },
+  pickerChipSub: { fontSize: 10, fontFamily: "Inter_400Regular", marginTop: 2, textTransform: "capitalize" },
   transferNote: { fontSize: 12, fontFamily: "Inter_400Regular", textAlign: "center", lineHeight: 18 },
   confirmBtn: {
     flexDirection: "row",

@@ -66,21 +66,16 @@ interface RestaurantContextType {
   ) => Order;
   addItemToOrder: (orderId: string, item: MenuItem, notes?: string) => void;
   removeItemFromOrder: (orderId: string, itemIndex: number) => void;
-  updateItemQuantity: (
-    orderId: string,
-    itemIndex: number,
-    quantity: number
-  ) => void;
-  updateItemStatus: (
-    orderId: string,
-    itemIndex: number,
-    status: OrderStatus
-  ) => void;
+  updateItemQuantity: (orderId: string, itemIndex: number, quantity: number) => void;
+  updateItemStatus: (orderId: string, itemIndex: number, status: OrderStatus) => void;
+  updateItemNotes: (orderId: string, itemIndex: number, notes: string) => void;
   updateOrderStatus: (orderId: string, status: OrderStatus) => void;
   closeTable: (tableId: string) => void;
   getTotalAmount: (orderId: string) => number;
   completedOrders: Order[];
   transferOrder: (fromTableId: string, toTableId: string) => void;
+  transferKOT: (fromTableId: string, toTableId: string) => void;
+  transferItems: (fromTableId: string, toTableId: string, itemIndices: number[]) => void;
   addTable: (label: string, capacity: number, location: string) => Table;
   removeTable: (tableId: string) => void;
   getTableDisplayName: (table: Table) => string;
@@ -130,8 +125,8 @@ export function RestaurantProvider({ children }: { children: React.ReactNode }) 
     const load = async () => {
       try {
         const [storedTables, storedOrders] = await Promise.all([
-          AsyncStorage.getItem("restaurant_tables_v2"),
-          AsyncStorage.getItem("restaurant_orders_v2"),
+          AsyncStorage.getItem("restaurant_tables_v3"),
+          AsyncStorage.getItem("restaurant_orders_v3"),
         ]);
         if (storedTables) setTables(JSON.parse(storedTables));
         if (storedOrders) setOrders(JSON.parse(storedOrders));
@@ -141,11 +136,11 @@ export function RestaurantProvider({ children }: { children: React.ReactNode }) 
   }, []);
 
   useEffect(() => {
-    AsyncStorage.setItem("restaurant_tables_v2", JSON.stringify(tables)).catch(() => {});
+    AsyncStorage.setItem("restaurant_tables_v3", JSON.stringify(tables)).catch(() => {});
   }, [tables]);
 
   useEffect(() => {
-    AsyncStorage.setItem("restaurant_orders_v2", JSON.stringify(orders)).catch(() => {});
+    AsyncStorage.setItem("restaurant_orders_v3", JSON.stringify(orders)).catch(() => {});
   }, [orders]);
 
   const getTableDisplayName = useCallback((table: Table) => {
@@ -207,35 +202,6 @@ export function RestaurantProvider({ children }: { children: React.ReactNode }) 
     []
   );
 
-  const transferOrder = useCallback((fromTableId: string, toTableId: string) => {
-    const fromTable = tables.find((t) => t.id === fromTableId);
-    if (!fromTable?.currentOrderId) return;
-    const orderId = fromTable.currentOrderId;
-    setTables((prev) =>
-      prev.map((t) => {
-        if (t.id === fromTableId) return { ...t, status: "cleaning" as TableStatus, currentOrderId: null };
-        if (t.id === toTableId) return { ...t, status: "occupied" as TableStatus, currentOrderId: orderId };
-        return t;
-      })
-    );
-    setOrders((prev) =>
-      prev.map((o) =>
-        o.id === orderId
-          ? { ...o, tableId: toTableId, updatedAt: new Date().toISOString() }
-          : o
-      )
-    );
-    setTimeout(() => {
-      setTables((prev) =>
-        prev.map((t) =>
-          t.id === fromTableId && t.status === "cleaning"
-            ? { ...t, status: "available" as TableStatus }
-            : t
-        )
-      );
-    }, 3000);
-  }, [tables]);
-
   const addItemToOrder = useCallback(
     (orderId: string, item: MenuItem, notes = "") => {
       setOrders((prev) =>
@@ -256,7 +222,7 @@ export function RestaurantProvider({ children }: { children: React.ReactNode }) 
             ...o,
             items: [
               ...o.items,
-              { menuItem: item, quantity: 1, notes, status: "pending" as OrderStatus },
+              { menuItem: item, quantity: 1, notes, status: "served" as OrderStatus },
             ],
             updatedAt: new Date().toISOString(),
           };
@@ -313,6 +279,21 @@ export function RestaurantProvider({ children }: { children: React.ReactNode }) 
     []
   );
 
+  const updateItemNotes = useCallback(
+    (orderId: string, itemIndex: number, notes: string) => {
+      setOrders((prev) =>
+        prev.map((o) => {
+          if (o.id !== orderId) return o;
+          const newItems = o.items.map((item, i) =>
+            i === itemIndex ? { ...item, notes } : item
+          );
+          return { ...o, items: newItems, updatedAt: new Date().toISOString() };
+        })
+      );
+    },
+    []
+  );
+
   const updateOrderStatus = useCallback(
     (orderId: string, status: OrderStatus) => {
       setOrders((prev) =>
@@ -355,6 +336,178 @@ export function RestaurantProvider({ children }: { children: React.ReactNode }) 
     [orders]
   );
 
+  const transferOrder = useCallback((fromTableId: string, toTableId: string) => {
+    const fromTable = tables.find((t) => t.id === fromTableId);
+    if (!fromTable?.currentOrderId) return;
+    const orderId = fromTable.currentOrderId;
+    setTables((prev) =>
+      prev.map((t) => {
+        if (t.id === fromTableId) return { ...t, status: "cleaning" as TableStatus, currentOrderId: null };
+        if (t.id === toTableId) return { ...t, status: "occupied" as TableStatus, currentOrderId: orderId };
+        return t;
+      })
+    );
+    setOrders((prev) =>
+      prev.map((o) =>
+        o.id === orderId
+          ? { ...o, tableId: toTableId, updatedAt: new Date().toISOString() }
+          : o
+      )
+    );
+    setTimeout(() => {
+      setTables((prev) =>
+        prev.map((t) =>
+          t.id === fromTableId && t.status === "cleaning"
+            ? { ...t, status: "available" as TableStatus }
+            : t
+        )
+      );
+    }, 3000);
+  }, [tables]);
+
+  const transferKOT = useCallback((fromTableId: string, toTableId: string) => {
+    const fromTable = tables.find((t) => t.id === fromTableId);
+    const toTable = tables.find((t) => t.id === toTableId);
+    if (!fromTable?.currentOrderId) return;
+
+    const fromOrder = orders.find((o) => o.id === fromTable.currentOrderId);
+    if (!fromOrder) return;
+
+    const kotItems = fromOrder.items.filter(
+      (i) => i.status === "pending" || i.status === "preparing"
+    );
+    const remainingItems = fromOrder.items.filter(
+      (i) => i.status !== "pending" && i.status !== "preparing"
+    );
+
+    if (kotItems.length === 0) return;
+
+    setOrders((prev) => {
+      let updated = prev.map((o) => {
+        if (o.id !== fromOrder.id) return o;
+        return { ...o, items: remainingItems, updatedAt: new Date().toISOString() };
+      });
+
+      if (toTable?.currentOrderId) {
+        updated = updated.map((o) => {
+          if (o.id !== toTable.currentOrderId) return o;
+          return { ...o, items: [...o.items, ...kotItems], updatedAt: new Date().toISOString() };
+        });
+      } else {
+        const newOrder: Order = {
+          id: generateId(),
+          tableId: toTableId,
+          items: kotItems,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          status: "pending",
+          serverName: fromOrder.serverName,
+          guestCount: 0,
+          customerMobile: "",
+        };
+        updated = [...updated, newOrder];
+        setTables((prev) =>
+          prev.map((t) =>
+            t.id === toTableId
+              ? { ...t, status: "occupied" as TableStatus, currentOrderId: newOrder.id }
+              : t
+          )
+        );
+      }
+      return updated;
+    });
+
+    if (remainingItems.length === 0) {
+      setTables((prev) =>
+        prev.map((t) =>
+          t.id === fromTableId
+            ? { ...t, status: "cleaning" as TableStatus, currentOrderId: null }
+            : t
+        )
+      );
+      setTimeout(() => {
+        setTables((prev) =>
+          prev.map((t) =>
+            t.id === fromTableId && t.status === "cleaning"
+              ? { ...t, status: "available" as TableStatus }
+              : t
+          )
+        );
+      }, 3000);
+    }
+  }, [tables, orders]);
+
+  const transferItems = useCallback(
+    (fromTableId: string, toTableId: string, itemIndices: number[]) => {
+      const fromTable = tables.find((t) => t.id === fromTableId);
+      const toTable = tables.find((t) => t.id === toTableId);
+      if (!fromTable?.currentOrderId) return;
+
+      const fromOrder = orders.find((o) => o.id === fromTable.currentOrderId);
+      if (!fromOrder) return;
+
+      const selectedItems = fromOrder.items.filter((_, i) => itemIndices.includes(i));
+      const remainingItems = fromOrder.items.filter((_, i) => !itemIndices.includes(i));
+
+      if (selectedItems.length === 0) return;
+
+      setOrders((prev) => {
+        let updated = prev.map((o) => {
+          if (o.id !== fromOrder.id) return o;
+          return { ...o, items: remainingItems, updatedAt: new Date().toISOString() };
+        });
+
+        if (toTable?.currentOrderId) {
+          updated = updated.map((o) => {
+            if (o.id !== toTable.currentOrderId) return o;
+            return { ...o, items: [...o.items, ...selectedItems], updatedAt: new Date().toISOString() };
+          });
+        } else {
+          const newOrder: Order = {
+            id: generateId(),
+            tableId: toTableId,
+            items: selectedItems,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            status: "pending",
+            serverName: fromOrder.serverName,
+            guestCount: 0,
+            customerMobile: "",
+          };
+          updated = [...updated, newOrder];
+          setTables((prev) =>
+            prev.map((t) =>
+              t.id === toTableId
+                ? { ...t, status: "occupied" as TableStatus, currentOrderId: newOrder.id }
+                : t
+            )
+          );
+        }
+        return updated;
+      });
+
+      if (remainingItems.length === 0) {
+        setTables((prev) =>
+          prev.map((t) =>
+            t.id === fromTableId
+              ? { ...t, status: "cleaning" as TableStatus, currentOrderId: null }
+              : t
+          )
+        );
+        setTimeout(() => {
+          setTables((prev) =>
+            prev.map((t) =>
+              t.id === fromTableId && t.status === "cleaning"
+                ? { ...t, status: "available" as TableStatus }
+                : t
+            )
+          );
+        }, 3000);
+      }
+    },
+    [tables, orders]
+  );
+
   const addTable = useCallback((label: string, capacity: number, location: string): Table => {
     const newTable: Table = {
       id: generateId(),
@@ -395,11 +548,14 @@ export function RestaurantProvider({ children }: { children: React.ReactNode }) 
         removeItemFromOrder,
         updateItemQuantity,
         updateItemStatus,
+        updateItemNotes,
         updateOrderStatus,
         closeTable,
         getTotalAmount,
         completedOrders,
         transferOrder,
+        transferKOT,
+        transferItems,
         addTable,
         removeTable,
         getTableDisplayName,

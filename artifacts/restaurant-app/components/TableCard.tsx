@@ -20,12 +20,12 @@ interface TableCardProps {
 
 const STATUS_CONFIG: Record<
   TableStatus,
-  { label: string; color: string; icon: keyof typeof Feather.glyphMap }
+  { label: string; color: string; bg: string; icon: keyof typeof Feather.glyphMap }
 > = {
-  available: { label: "Available", color: "#27AE60", icon: "check-circle" },
-  occupied: { label: "Occupied", color: "#C0392B", icon: "users" },
-  reserved: { label: "Reserved", color: "#2980B9", icon: "clock" },
-  cleaning: { label: "Cleaning", color: "#F39C12", icon: "refresh-cw" },
+  available: { label: "Available", color: "#27AE60", bg: "#27AE6022", icon: "check-circle" },
+  occupied:  { label: "Occupied",  color: "#C0392B", bg: "#C0392B22", icon: "users" },
+  reserved:  { label: "Reserved",  color: "#2980B9", bg: "#2980B922", icon: "clock" },
+  cleaning:  { label: "Cleaning",  color: "#F39C12", bg: "#F39C1222", icon: "refresh-cw" },
 };
 
 export function TableCard({
@@ -41,19 +41,18 @@ export function TableCard({
   return (
     <TouchableOpacity
       onPress={onPress}
-      activeOpacity={0.85}
+      activeOpacity={0.82}
       style={[
         styles.card,
         {
-          backgroundColor: colors.card,
-          borderColor:
-            table.status === "occupied" ? colors.primary : colors.border,
-          borderWidth: table.status === "occupied" ? 2 : 1,
+          backgroundColor: config.bg,
+          borderColor: config.color + "55",
+          borderWidth: 1.5,
           ...(Platform.OS !== "web"
             ? {
-                shadowColor: "#000",
+                shadowColor: config.color,
                 shadowOffset: { width: 0, height: 2 },
-                shadowOpacity: 0.08,
+                shadowOpacity: 0.15,
                 shadowRadius: 6,
                 elevation: 3,
               }
@@ -65,11 +64,11 @@ export function TableCard({
         <View
           style={[
             styles.tableNumber,
-            { backgroundColor: table.isCustom ? colors.accent + "20" : "#2C3E5015" },
+            { backgroundColor: config.color + "25" },
           ]}
         >
           <Text
-            style={[styles.numberText, { color: colors.foreground }]}
+            style={[styles.numberText, { color: config.color }]}
             numberOfLines={1}
             adjustsFontSizeToFit
           >
@@ -79,26 +78,23 @@ export function TableCard({
         <View
           style={[
             styles.statusBadge,
-            { backgroundColor: config.color + "20" },
+            { backgroundColor: config.color + "30" },
           ]}
         >
           <Feather name={config.icon} size={10} color={config.color} />
-          <Text style={[styles.statusText, { color: config.color }]}>
-            {config.label}
-          </Text>
         </View>
       </View>
 
       <View style={styles.info}>
         <View style={styles.infoRow}>
-          <Feather name="users" size={12} color={colors.mutedForeground} />
-          <Text style={[styles.infoText, { color: colors.mutedForeground }]}>
+          <Feather name="users" size={11} color={config.color + "99"} />
+          <Text style={[styles.infoText, { color: config.color + "cc" }]}>
             {table.capacity} seats
           </Text>
         </View>
         <View style={styles.infoRow}>
-          <Feather name="map-pin" size={12} color={colors.mutedForeground} />
-          <Text style={[styles.infoText, { color: colors.mutedForeground }]} numberOfLines={1}>
+          <Feather name="map-pin" size={11} color={config.color + "99"} />
+          <Text style={[styles.infoText, { color: config.color + "cc" }]} numberOfLines={1}>
             {table.location}
           </Text>
         </View>
@@ -108,17 +104,15 @@ export function TableCard({
         <View
           style={[
             styles.orderInfo,
-            { borderTopColor: colors.border, backgroundColor: colors.surface2 },
+            { borderTopColor: config.color + "30", backgroundColor: config.color + "15" },
           ]}
         >
-          <View style={styles.orderRow}>
-            <Text style={[styles.orderLabel, { color: colors.mutedForeground }]}>
-              {orderItemCount} item{orderItemCount !== 1 ? "s" : ""}
-            </Text>
-            <Text style={[styles.orderAmount, { color: colors.primary }]}>
-              ${totalAmount?.toFixed(2)}
-            </Text>
-          </View>
+          <Text style={[styles.orderLabel, { color: config.color + "bb" }]}>
+            {orderItemCount} item{orderItemCount !== 1 ? "s" : ""}
+          </Text>
+          <Text style={[styles.orderAmount, { color: config.color }]}>
+            ${totalAmount?.toFixed(2)}
+          </Text>
         </View>
       )}
     </TouchableOpacity>
@@ -140,28 +134,25 @@ const styles = StyleSheet.create({
   },
   tableNumber: {
     minWidth: 38,
-    height: 38,
+    height: 36,
     borderRadius: 10,
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 6,
+    flex: 1,
+    marginRight: 6,
   },
   numberText: {
-    fontSize: 14,
+    fontSize: 13,
     fontFamily: "Inter_700Bold",
     textAlign: "center",
   },
   statusBadge: {
-    flexDirection: "row",
+    width: 26,
+    height: 26,
+    borderRadius: 13,
     alignItems: "center",
-    gap: 3,
-    paddingHorizontal: 6,
-    paddingVertical: 3,
-    borderRadius: 20,
-  },
-  statusText: {
-    fontSize: 10,
-    fontFamily: "Inter_600SemiBold",
+    justifyContent: "center",
   },
   info: {
     paddingHorizontal: 10,
@@ -181,9 +172,7 @@ const styles = StyleSheet.create({
   orderInfo: {
     borderTopWidth: 1,
     paddingHorizontal: 10,
-    paddingVertical: 8,
-  },
-  orderRow: {
+    paddingVertical: 7,
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",

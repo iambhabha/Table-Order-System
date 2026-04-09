@@ -23,6 +23,12 @@ import { useColors } from "@/hooks/useColors";
 
 const CATEGORIES = ["Starters", "Mains", "Desserts", "Drinks"];
 
+const OPEN_ITEM_CATEGORIES: { label: string; emoji: string; color: string }[] = [
+  { label: "Food",      emoji: "🍽️", color: "#C0392B" },
+  { label: "Liquor",    emoji: "🍾", color: "#8E44AD" },
+  { label: "Beverages", emoji: "🥤", color: "#2980B9" },
+];
+
 type TransferType = "table" | "kot" | "items";
 
 const STATUS_CONFIG: Record<string, { color: string; bg: string }> = {
@@ -63,6 +69,12 @@ export default function TableDetailScreen() {
   const [showMenu, setShowMenu] = useState(false);
   const [menuCategory, setMenuCategory] = useState("Starters");
   const [menuSearch, setMenuSearch] = useState("");
+  const [showOpenItem, setShowOpenItem] = useState(false);
+
+  const [openItemName, setOpenItemName] = useState("");
+  const [openItemCategory, setOpenItemCategory] = useState(OPEN_ITEM_CATEGORIES[0]);
+  const [openItemPrice, setOpenItemPrice] = useState("");
+  const [openItemQty, setOpenItemQty] = useState(1);
 
   const [showStartModal, setShowStartModal] = useState(false);
   const [serverName, setServerName] = useState("");
@@ -110,6 +122,40 @@ export default function TableDetailScreen() {
     },
     [order, addItemToOrder]
   );
+
+  const resetOpenItem = () => {
+    setOpenItemName("");
+    setOpenItemCategory(OPEN_ITEM_CATEGORIES[0]);
+    setOpenItemPrice("");
+    setOpenItemQty(1);
+    setShowOpenItem(false);
+  };
+
+  const handleAddOpenItem = useCallback(() => {
+    if (!order) return;
+    if (!openItemName.trim()) {
+      Alert.alert("Required", "Please enter an item name.");
+      return;
+    }
+    const price = parseFloat(openItemPrice);
+    if (isNaN(price) || price <= 0) {
+      Alert.alert("Invalid Price", "Please enter a valid price greater than 0.");
+      return;
+    }
+    const openMenuItem: MenuItem = {
+      id: `open_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+      name: openItemName.trim(),
+      category: openItemCategory.label,
+      price,
+      description: `Open Item · ${openItemCategory.label}`,
+      emoji: openItemCategory.emoji,
+    };
+    for (let i = 0; i < openItemQty; i++) {
+      addItemToOrder(order.id, openMenuItem, "");
+    }
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    resetOpenItem();
+  }, [order, openItemName, openItemCategory, openItemPrice, openItemQty, addItemToOrder]);
 
   const handlePayAndClose = useCallback(() => {
     if (!order || !table) return;
@@ -460,37 +506,39 @@ export default function TableDetailScreen() {
         visible={showMenu}
         animationType="slide"
         presentationStyle="pageSheet"
-        onRequestClose={() => { setShowMenu(false); setMenuSearch(""); }}
+        onRequestClose={() => { setShowMenu(false); setMenuSearch(""); resetOpenItem(); }}
       >
         <View style={[styles.modalContainer, { backgroundColor: colors.background }]}>
           <View style={[styles.modalHeader, { borderBottomColor: colors.border }]}>
-            <TouchableOpacity onPress={() => { setShowMenu(false); setMenuSearch(""); }}>
+            <TouchableOpacity onPress={() => { setShowMenu(false); setMenuSearch(""); resetOpenItem(); }}>
               <Feather name="x" size={22} color={colors.mutedForeground} />
             </TouchableOpacity>
             <Text style={[styles.modalTitle, { color: colors.foreground }]}>Add Items</Text>
             <View style={{ width: 22 }} />
           </View>
 
-          {/* Search bar */}
-          <View style={[styles.searchBar, { backgroundColor: colors.muted, borderBottomColor: colors.border }]}>
-            <Feather name="search" size={16} color={colors.mutedForeground} style={{ marginRight: 8 }} />
-            <TextInput
-              value={menuSearch}
-              onChangeText={setMenuSearch}
-              placeholder="Search items by name..."
-              placeholderTextColor={colors.mutedForeground}
-              style={[styles.searchInput, { color: colors.foreground }]}
-              returnKeyType="search"
-              clearButtonMode="while-editing"
-            />
-            {menuSearch.length > 0 && (
-              <TouchableOpacity onPress={() => setMenuSearch("")} style={{ padding: 4 }}>
-                <Feather name="x-circle" size={16} color={colors.mutedForeground} />
-              </TouchableOpacity>
-            )}
-          </View>
+          {/* Search bar — only when not in open item mode */}
+          {!showOpenItem && (
+            <View style={[styles.searchBar, { backgroundColor: colors.muted, borderBottomColor: colors.border }]}>
+              <Feather name="search" size={16} color={colors.mutedForeground} style={{ marginRight: 8 }} />
+              <TextInput
+                value={menuSearch}
+                onChangeText={setMenuSearch}
+                placeholder="Search items by name..."
+                placeholderTextColor={colors.mutedForeground}
+                style={[styles.searchInput, { color: colors.foreground }]}
+                returnKeyType="search"
+                clearButtonMode="while-editing"
+              />
+              {menuSearch.length > 0 && (
+                <TouchableOpacity onPress={() => setMenuSearch("")} style={{ padding: 4 }}>
+                  <Feather name="x-circle" size={16} color={colors.mutedForeground} />
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
 
-          {/* Category tabs — only show when not searching */}
+          {/* Category tabs — only show when not searching and not in open item mode */}
           {!menuSearch.trim() && (
             <ScrollView
               horizontal
@@ -501,17 +549,35 @@ export default function TableDetailScreen() {
               {CATEGORIES.map((cat) => (
                 <TouchableOpacity
                   key={cat}
-                  onPress={() => setMenuCategory(cat)}
+                  onPress={() => { setMenuCategory(cat); setShowOpenItem(false); }}
                   style={[
                     styles.catChip,
-                    menuCategory === cat ? { backgroundColor: colors.primary } : { backgroundColor: colors.muted },
+                    !showOpenItem && menuCategory === cat
+                      ? { backgroundColor: colors.primary }
+                      : { backgroundColor: colors.muted },
                   ]}
                 >
-                  <Text style={[styles.catText, { color: menuCategory === cat ? "#fff" : colors.mutedForeground }]}>
+                  <Text style={[styles.catText, { color: !showOpenItem && menuCategory === cat ? "#fff" : colors.mutedForeground }]}>
                     {cat}
                   </Text>
                 </TouchableOpacity>
               ))}
+              {/* Open Item special tab */}
+              <TouchableOpacity
+                onPress={() => { setShowOpenItem(true); setMenuSearch(""); }}
+                style={[
+                  styles.catChip,
+                  styles.openItemTab,
+                  showOpenItem
+                    ? { backgroundColor: "#8E44AD" }
+                    : { backgroundColor: "#8E44AD18", borderWidth: 1.5, borderColor: "#8E44AD55" },
+                ]}
+              >
+                <Feather name="edit-3" size={12} color={showOpenItem ? "#fff" : "#8E44AD"} />
+                <Text style={[styles.catText, { color: showOpenItem ? "#fff" : "#8E44AD" }]}>
+                  Open Item
+                </Text>
+              </TouchableOpacity>
             </ScrollView>
           )}
 
@@ -523,21 +589,130 @@ export default function TableDetailScreen() {
             </View>
           )}
 
-          <FlatList
-            data={filteredMenu}
-            keyExtractor={(item) => item.id}
-            contentContainerStyle={styles.menuList}
-            renderItem={({ item }) => <MenuItemCard item={item} onAdd={handleAddItem} />}
-            ListEmptyComponent={
-              <View style={styles.emptyOrder}>
-                <Feather name="search" size={32} color={colors.mutedForeground} />
-                <Text style={[styles.emptyOrderText, { color: colors.mutedForeground }]}>
-                  No items match your search
+          {/* ── OPEN ITEM FORM ── */}
+          {showOpenItem ? (
+            <ScrollView contentContainerStyle={styles.openItemContainer} keyboardShouldPersistTaps="handled">
+              <View style={[styles.openItemBanner, { backgroundColor: "#8E44AD15", borderColor: "#8E44AD44" }]}>
+                <Feather name="edit-3" size={16} color="#8E44AD" />
+                <Text style={[styles.openItemBannerText, { color: "#8E44AD" }]}>
+                  Open Item — for custom or special orders not in the menu
                 </Text>
               </View>
-            }
-            keyboardShouldPersistTaps="handled"
-          />
+
+              <Text style={[styles.openItemLabel, { color: colors.foreground }]}>Item Name</Text>
+              <TextInput
+                value={openItemName}
+                onChangeText={setOpenItemName}
+                placeholder="e.g. Special Mix, Chef's Platter, Custom Cocktail"
+                placeholderTextColor={colors.mutedForeground}
+                style={[styles.openItemInput, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground }]}
+                autoFocus
+                maxLength={60}
+              />
+
+              <Text style={[styles.openItemLabel, { color: colors.foreground, marginTop: 20 }]}>Category</Text>
+              <View style={styles.openCatRow}>
+                {OPEN_ITEM_CATEGORIES.map((cat) => {
+                  const selected = openItemCategory.label === cat.label;
+                  return (
+                    <TouchableOpacity
+                      key={cat.label}
+                      onPress={() => setOpenItemCategory(cat)}
+                      style={[
+                        styles.openCatChip,
+                        {
+                          backgroundColor: selected ? cat.color : cat.color + "12",
+                          borderColor: selected ? cat.color : cat.color + "55",
+                        },
+                      ]}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={styles.openCatEmoji}>{cat.emoji}</Text>
+                      <Text style={[styles.openCatText, { color: selected ? "#fff" : cat.color }]}>
+                        {cat.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              <Text style={[styles.openItemLabel, { color: colors.foreground, marginTop: 20 }]}>Price (per unit)</Text>
+              <View style={[styles.priceInputRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                <Text style={[styles.currencySign, { color: colors.mutedForeground }]}>$</Text>
+                <TextInput
+                  value={openItemPrice}
+                  onChangeText={setOpenItemPrice}
+                  placeholder="0.00"
+                  placeholderTextColor={colors.mutedForeground}
+                  keyboardType="decimal-pad"
+                  style={[styles.priceInput, { color: colors.foreground }]}
+                />
+              </View>
+
+              <Text style={[styles.openItemLabel, { color: colors.foreground, marginTop: 20 }]}>Quantity</Text>
+              <View style={styles.openQtyRow}>
+                <TouchableOpacity
+                  onPress={() => setOpenItemQty((q) => Math.max(1, q - 1))}
+                  style={[styles.openQtyBtn, { backgroundColor: colors.muted, borderColor: colors.border }]}
+                >
+                  <Feather name="minus" size={18} color={colors.foreground} />
+                </TouchableOpacity>
+                <View style={[styles.openQtyDisplay, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                  <Text style={[styles.openQtyText, { color: colors.foreground }]}>{openItemQty}</Text>
+                </View>
+                <TouchableOpacity
+                  onPress={() => setOpenItemQty((q) => Math.min(99, q + 1))}
+                  style={[styles.openQtyBtn, { backgroundColor: colors.muted, borderColor: colors.border }]}
+                >
+                  <Feather name="plus" size={18} color={colors.foreground} />
+                </TouchableOpacity>
+              </View>
+
+              {openItemName.trim() && openItemPrice && (
+                <View style={[styles.openItemPreview, { backgroundColor: openItemCategory.color + "12", borderColor: openItemCategory.color + "44" }]}>
+                  <Text style={[styles.openItemPreviewEmoji]}>{openItemCategory.emoji}</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.openItemPreviewName, { color: colors.foreground }]}>
+                      {openItemName.trim()}
+                    </Text>
+                    <Text style={[styles.openItemPreviewMeta, { color: colors.mutedForeground }]}>
+                      {openItemCategory.label} · x{openItemQty} · ${(parseFloat(openItemPrice || "0") * openItemQty).toFixed(2)}
+                    </Text>
+                  </View>
+                </View>
+              )}
+
+              <TouchableOpacity
+                onPress={handleAddOpenItem}
+                style={[
+                  styles.openItemAddBtn,
+                  { backgroundColor: openItemCategory.color },
+                ]}
+                activeOpacity={0.85}
+              >
+                <Feather name="plus-circle" size={18} color="#fff" />
+                <Text style={styles.openItemAddBtnText}>
+                  Add to Order · {openItemQty}x ${(parseFloat(openItemPrice || "0") * openItemQty).toFixed(2)}
+                </Text>
+              </TouchableOpacity>
+            </ScrollView>
+          ) : (
+            <FlatList
+              data={filteredMenu}
+              keyExtractor={(item) => item.id}
+              contentContainerStyle={styles.menuList}
+              renderItem={({ item }) => <MenuItemCard item={item} onAdd={handleAddItem} />}
+              ListEmptyComponent={
+                <View style={styles.emptyOrder}>
+                  <Feather name="search" size={32} color={colors.mutedForeground} />
+                  <Text style={[styles.emptyOrderText, { color: colors.mutedForeground }]}>
+                    No items match your search
+                  </Text>
+                </View>
+              }
+              keyboardShouldPersistTaps="handled"
+            />
+          )}
         </View>
       </Modal>
 
@@ -992,7 +1167,98 @@ const styles = StyleSheet.create({
   catList: { paddingHorizontal: 16, gap: 8 },
   catChip: { paddingHorizontal: 16, paddingVertical: 7, borderRadius: 20 },
   catText: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
+  openItemTab: { flexDirection: "row", alignItems: "center", gap: 5 },
   menuList: { padding: 16 },
+  openItemContainer: { padding: 20, paddingBottom: 50 },
+  openItemBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    marginBottom: 22,
+  },
+  openItemBannerText: { fontSize: 13, fontFamily: "Inter_500Medium", flex: 1, lineHeight: 18 },
+  openItemLabel: { fontSize: 14, fontFamily: "Inter_600SemiBold", marginBottom: 10 },
+  openItemInput: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    fontSize: 16,
+    fontFamily: "Inter_400Regular",
+  },
+  openCatRow: { flexDirection: "row", gap: 10, flexWrap: "wrap" },
+  openCatChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    flex: 1,
+    minWidth: 90,
+    justifyContent: "center",
+  },
+  openCatEmoji: { fontSize: 18 },
+  openCatText: { fontSize: 14, fontFamily: "Inter_700Bold" },
+  priceInputRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 4,
+  },
+  currencySign: { fontSize: 18, fontFamily: "Inter_600SemiBold", marginRight: 4 },
+  priceInput: {
+    flex: 1,
+    fontSize: 22,
+    fontFamily: "Inter_700Bold",
+    paddingVertical: 8,
+  },
+  openQtyRow: { flexDirection: "row", alignItems: "center", gap: 12 },
+  openQtyBtn: {
+    width: 46,
+    height: 46,
+    borderRadius: 14,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  openQtyDisplay: {
+    width: 64,
+    height: 46,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  openQtyText: { fontSize: 22, fontFamily: "Inter_700Bold" },
+  openItemPreview: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    padding: 14,
+    marginTop: 22,
+  },
+  openItemPreviewEmoji: { fontSize: 28 },
+  openItemPreviewName: { fontSize: 15, fontFamily: "Inter_700Bold", marginBottom: 3 },
+  openItemPreviewMeta: { fontSize: 12, fontFamily: "Inter_400Regular" },
+  openItemAddBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 9,
+    paddingVertical: 15,
+    borderRadius: 14,
+    marginTop: 20,
+  },
+  openItemAddBtnText: { fontSize: 16, fontFamily: "Inter_700Bold", color: "#fff" },
   // Transfer
   stepLabel: { fontSize: 14, fontFamily: "Inter_700Bold", marginBottom: 16 },
   hintText: { fontSize: 13, fontFamily: "Inter_400Regular" },

@@ -18,7 +18,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { MenuItemCard } from "@/components/MenuItemCard";
 import { OrderItemRow } from "@/components/OrderItemRow";
 import { useRestaurant } from "@/context/RestaurantContext";
-import { MenuItem, OrderStatus, Table } from "@/context/RestaurantContext";
+import { KOT, MenuItem, OrderStatus, Table } from "@/context/RestaurantContext";
 import { useColors } from "@/hooks/useColors";
 
 const CATEGORIES = ["Starters", "Mains", "Desserts", "Drinks"];
@@ -38,6 +38,13 @@ const STATUS_CONFIG: Record<string, { color: string; bg: string }> = {
   cleaning:  { color: "#F39C12", bg: "#F39C1222" },
 };
 
+type CartItem = { menuItem: MenuItem; quantity: number; notes: string };
+
+function formatTime(dateStr: string) {
+  const d = new Date(dateStr);
+  return d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: true });
+}
+
 export default function TableDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const colors = useColors();
@@ -47,11 +54,9 @@ export default function TableDetailScreen() {
     getTable,
     getTableOrder,
     createOrder,
-    addItemToOrder,
-    removeItemFromOrder,
-    updateItemQuantity,
-    updateItemStatus,
-    updateItemNotes,
+    addKOT,
+    removeItemFromKOT,
+    updateKOTItem,
     updateOrderStatus,
     updateTableStatus,
     closeTable,
@@ -65,6 +70,9 @@ export default function TableDetailScreen() {
 
   const table = getTable(id ?? "");
   const order = getTableOrder(id ?? "");
+
+  // ── Cart (items being built before placing a KOT) ──────────────────────────
+  const [cart, setCart] = useState<CartItem[]>([]);
 
   const [showMenu, setShowMenu] = useState(false);
   const [menuCategory, setMenuCategory] = useState("Starters");
@@ -84,7 +92,7 @@ export default function TableDetailScreen() {
   const [showTransferTypeModal, setShowTransferTypeModal] = useState(false);
   const [selectedTransferType, setSelectedTransferType] = useState<TransferType | null>(null);
   const [transferTo, setTransferTo] = useState<Table | null>(null);
-  const [selectedItemIndices, setSelectedItemIndices] = useState<number[]>([]);
+  const [selectedKOTItems, setSelectedKOTItems] = useState<{ kotId: string; itemIndex: number }[]>([]);
 
   const topPad = Platform.OS === "web" ? Math.max(insets.top, 67) : insets.top;
   const bottomPad = Platform.OS === "web" ? Math.max(insets.bottom, 34) : insets.bottom;
@@ -95,14 +103,59 @@ export default function TableDetailScreen() {
 
   const filteredMenu = useMemo(() => {
     if (menuSearch.trim()) {
-      return menu.filter((m) =>
-        m.name.toLowerCase().includes(menuSearch.trim().toLowerCase()) ||
-        m.description.toLowerCase().includes(menuSearch.trim().toLowerCase())
+      return menu.filter(
+        (m) =>
+          m.name.toLowerCase().includes(menuSearch.trim().toLowerCase()) ||
+          m.description.toLowerCase().includes(menuSearch.trim().toLowerCase())
       );
     }
     return menu.filter((m) => m.category === menuCategory);
   }, [menu, menuSearch, menuCategory]);
 
+  // ── Cart helpers ───────────────────────────────────────────────────────────
+  const cartTotal = cart.reduce((s, c) => s + c.menuItem.price * c.quantity, 0);
+  const cartCount = cart.reduce((s, c) => s + c.quantity, 0);
+
+  const addToCart = useCallback((item: MenuItem) => {
+    if (!order) return;
+    setCart((prev) => {
+      const idx = prev.findIndex((c) => c.menuItem.id === item.id && c.notes === "");
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = { ...next[idx], quantity: next[idx].quantity + 1 };
+        return next;
+      }
+      return [...prev, { menuItem: item, quantity: 1, notes: "" }];
+    });
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  }, [order]);
+
+  const updateCartQty = (idx: number, qty: number) => {
+    setCart((prev) => {
+      if (qty <= 0) return prev.filter((_, i) => i !== idx);
+      const next = [...prev];
+      next[idx] = { ...next[idx], quantity: qty };
+      return next;
+    });
+  };
+
+  const updateCartNotes = (idx: number, notes: string) => {
+    setCart((prev) => {
+      const next = [...prev];
+      next[idx] = { ...next[idx], notes };
+      return next;
+    });
+  };
+
+  const handlePlaceKOT = useCallback(() => {
+    if (!order || cart.length === 0) return;
+    addKOT(order.id, cart);
+    setCart([]);
+    setShowMenu(false);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+  }, [order, cart, addKOT]);
+
+  // ── Handlers ───────────────────────────────────────────────────────────────
   const handleStartOrder = useCallback(() => {
     if (!serverName.trim()) {
       Alert.alert("Required", "Please enter your name.");
@@ -113,15 +166,6 @@ export default function TableDetailScreen() {
     setShowStartModal(false);
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   }, [id, serverName, guestCount, customerMobile, createOrder]);
-
-  const handleAddItem = useCallback(
-    (item: MenuItem) => {
-      if (!order) return;
-      addItemToOrder(order.id, item);
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    },
-    [order, addItemToOrder]
-  );
 
   const resetOpenItem = () => {
     setOpenItemName("");
@@ -150,12 +194,10 @@ export default function TableDetailScreen() {
       description: `Open Item · ${openItemCategory.label}`,
       emoji: openItemCategory.emoji,
     };
-    for (let i = 0; i < openItemQty; i++) {
-      addItemToOrder(order.id, openMenuItem, "");
-    }
+    setCart((prev) => [...prev, { menuItem: openMenuItem, quantity: openItemQty, notes: "" }]);
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     resetOpenItem();
-  }, [order, openItemName, openItemCategory, openItemPrice, openItemQty, addItemToOrder]);
+  }, [order, openItemName, openItemCategory, openItemPrice, openItemQty]);
 
   const handlePayAndClose = useCallback(() => {
     if (!order || !table) return;
@@ -188,7 +230,7 @@ export default function TableDetailScreen() {
     setShowTransferTypeModal(false);
     setSelectedTransferType(null);
     setTransferTo(null);
-    setSelectedItemIndices([]);
+    setSelectedKOTItems([]);
   };
 
   const handleTransferConfirm = useCallback(() => {
@@ -204,21 +246,26 @@ export default function TableDetailScreen() {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       resetTransferState();
     } else if (selectedTransferType === "items") {
-      if (selectedItemIndices.length === 0) {
+      if (selectedKOTItems.length === 0) {
         Alert.alert("No items selected", "Please select at least one item to transfer.");
         return;
       }
-      transferItems(table.id, transferTo.id, selectedItemIndices);
+      transferItems(table.id, transferTo.id, selectedKOTItems);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       resetTransferState();
     }
-  }, [table, transferTo, selectedTransferType, selectedItemIndices, transferOrder, transferKOT, transferItems]);
+  }, [table, transferTo, selectedTransferType, selectedKOTItems, transferOrder, transferKOT, transferItems]);
 
-  const toggleItemSelection = (index: number) => {
-    setSelectedItemIndices((prev) =>
-      prev.includes(index) ? prev.filter((i) => i !== index) : [...prev, index]
-    );
+  const toggleKOTItemSelection = (kotId: string, itemIndex: number) => {
+    setSelectedKOTItems((prev) => {
+      const existing = prev.findIndex((s) => s.kotId === kotId && s.itemIndex === itemIndex);
+      if (existing >= 0) return prev.filter((_, i) => i !== existing);
+      return [...prev, { kotId, itemIndex }];
+    });
   };
+
+  const isKOTItemSelected = (kotId: string, itemIndex: number) =>
+    selectedKOTItems.some((s) => s.kotId === kotId && s.itemIndex === itemIndex);
 
   if (!table) {
     return (
@@ -231,11 +278,13 @@ export default function TableDetailScreen() {
   const displayName = getTableDisplayName(table);
   const total = order ? getTotalAmount(order.id) : 0;
 
-  const kotItems = order?.items.filter((i) => i.status !== "paid") ?? [];
+  // All placed items (flattened) for KOT Transfer count
+  const allPlacedItems = order?.kots.flatMap((k) => k.items) ?? [];
+  const totalPlacedQty = order?.kots.reduce(
+    (s, k) => s + k.items.reduce((s2, i) => s2 + i.quantity, 0), 0
+  ) ?? 0;
 
-  const transferTargetTables = selectedTransferType === "table"
-    ? availableTables
-    : anyTables;
+  const transferTargetTables = selectedTransferType === "table" ? availableTables : anyTables;
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -254,9 +303,7 @@ export default function TableDetailScreen() {
           <Feather name="arrow-left" size={22} color={colors.foreground} />
         </TouchableOpacity>
         <View style={styles.headerCenter}>
-          <Text style={[styles.headerTitle, { color: colors.foreground }]}>
-            {displayName}
-          </Text>
+          <Text style={[styles.headerTitle, { color: colors.foreground }]}>{displayName}</Text>
           <Text style={[styles.headerSub, { color: colors.mutedForeground }]}>
             {table.location} · {table.capacity} seats
           </Text>
@@ -327,6 +374,7 @@ export default function TableDetailScreen() {
       {/* Active Order */}
       {order && (
         <>
+          {/* Order meta strip */}
           <View
             style={[
               styles.orderMeta,
@@ -348,10 +396,8 @@ export default function TableDetailScreen() {
               </View>
             ) : null}
             <View>
-              <Text style={[styles.metaLabel, { color: colors.mutedForeground }]}>Items</Text>
-              <Text style={[styles.metaValue, { color: colors.foreground }]}>
-                {order.items.reduce((s, i) => s + i.quantity, 0)}
-              </Text>
+              <Text style={[styles.metaLabel, { color: colors.mutedForeground }]}>KOTs</Text>
+              <Text style={[styles.metaValue, { color: colors.foreground }]}>{order.kots.length}</Text>
             </View>
             <View>
               <Text style={[styles.metaLabel, { color: colors.mutedForeground }]}>Total</Text>
@@ -359,36 +405,100 @@ export default function TableDetailScreen() {
             </View>
           </View>
 
-          <FlatList
-            data={order.items}
-            keyExtractor={(_, i) => i.toString()}
+          {/* KOT list + cart */}
+          <ScrollView
+            style={{ flex: 1 }}
             contentContainerStyle={[styles.itemsList, { paddingBottom: bottomPad + 160 }]}
-            ListHeaderComponent={
-              order.items.length === 0 ? null : (
-                <Text style={[styles.sectionTitle, { color: colors.mutedForeground }]}>ORDER ITEMS</Text>
-              )
-            }
-            renderItem={({ item, index }) => (
-              <OrderItemRow
-                item={item}
-                index={index}
-                onIncrement={() => updateItemQuantity(order.id, index, item.quantity + 1)}
-                onDecrement={() => updateItemQuantity(order.id, index, item.quantity - 1)}
-                onRemove={() => removeItemFromOrder(order.id, index)}
-                onNotesChange={(notes) => updateItemNotes(order.id, index, notes)}
-                onStatusChange={(status: OrderStatus) => updateItemStatus(order.id, index, status)}
-              />
+            keyboardShouldPersistTaps="handled"
+          >
+            {/* Cart (pending, not yet placed) */}
+            {cart.length > 0 && (
+              <View style={[styles.kotSection, { borderColor: "#E67E2244" }]}>
+                <View style={[styles.kotHeader, { backgroundColor: "#E67E2210" }]}>
+                  <View style={styles.kotHeaderLeft}>
+                    <View style={[styles.kotBadge, { backgroundColor: "#E67E22" }]}>
+                      <Text style={styles.kotBadgeText}>PENDING</Text>
+                    </View>
+                    <Text style={[styles.kotMeta, { color: colors.mutedForeground }]}>
+                      {cartCount} item{cartCount !== 1 ? "s" : ""} · ${cartTotal.toFixed(2)} · Not placed
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    onPress={handlePlaceKOT}
+                    style={styles.placeKOTBtn}
+                    activeOpacity={0.85}
+                  >
+                    <Feather name="send" size={13} color="#fff" />
+                    <Text style={styles.placeKOTText}>Place KOT</Text>
+                  </TouchableOpacity>
+                </View>
+                {cart.map((cartItem, idx) => (
+                  <OrderItemRow
+                    key={idx}
+                    item={{ menuItem: cartItem.menuItem, quantity: cartItem.quantity, notes: cartItem.notes, status: "pending" }}
+                    index={idx}
+                    onIncrement={() => updateCartQty(idx, cartItem.quantity + 1)}
+                    onDecrement={() => updateCartQty(idx, cartItem.quantity - 1)}
+                    onRemove={() => setCart((prev) => prev.filter((_, i) => i !== idx))}
+                    onNotesChange={(notes) => updateCartNotes(idx, notes)}
+                  />
+                ))}
+              </View>
             )}
-            ListEmptyComponent={
+
+            {/* Placed KOTs */}
+            {order.kots.length === 0 && cart.length === 0 && (
               <View style={styles.emptyOrder}>
                 <Feather name="shopping-cart" size={36} color={colors.mutedForeground} />
                 <Text style={[styles.emptyOrderText, { color: colors.mutedForeground }]}>
                   No items yet. Tap Add Items below.
                 </Text>
               </View>
-            }
-          />
+            )}
 
+            {[...order.kots].reverse().map((kot) => {
+              const kotTotal = kot.items.reduce(
+                (s, i) => s + i.menuItem.price * i.quantity, 0
+              );
+              const kotQty = kot.items.reduce((s, i) => s + i.quantity, 0);
+              return (
+                <View key={kot.id} style={[styles.kotSection, { borderColor: colors.border }]}>
+                  <View style={[styles.kotHeader, { backgroundColor: colors.muted }]}>
+                    <View style={styles.kotHeaderLeft}>
+                      <View style={[styles.kotBadge, { backgroundColor: colors.primary }]}>
+                        <Text style={styles.kotBadgeText}>KOT #{kot.kotNumber}</Text>
+                      </View>
+                      <Text style={[styles.kotMeta, { color: colors.mutedForeground }]}>
+                        {kotQty} item{kotQty !== 1 ? "s" : ""} · ${kotTotal.toFixed(2)} · {formatTime(kot.createdAt)}
+                      </Text>
+                    </View>
+                  </View>
+                  {kot.items.map((item, itemIdx) => (
+                    <OrderItemRow
+                      key={itemIdx}
+                      item={item}
+                      index={itemIdx}
+                      onIncrement={() =>
+                        updateKOTItem(order.id, kot.id, itemIdx, { quantity: item.quantity + 1 })
+                      }
+                      onDecrement={() =>
+                        updateKOTItem(order.id, kot.id, itemIdx, { quantity: item.quantity - 1 })
+                      }
+                      onRemove={() => removeItemFromKOT(order.id, kot.id, itemIdx)}
+                      onNotesChange={(notes) =>
+                        updateKOTItem(order.id, kot.id, itemIdx, { notes })
+                      }
+                      onStatusChange={(status: OrderStatus) =>
+                        updateKOTItem(order.id, kot.id, itemIdx, { status })
+                      }
+                    />
+                  ))}
+                </View>
+              );
+            })}
+          </ScrollView>
+
+          {/* Action bar */}
           <View
             style={[
               styles.actionBar,
@@ -401,19 +511,30 @@ export default function TableDetailScreen() {
               activeOpacity={0.85}
             >
               <Feather name="plus" size={18} color="#fff" />
-              <Text style={styles.addBtnText}>Add Items</Text>
+              <Text style={styles.addBtnText}>
+                Add Items{cartCount > 0 ? ` (${cartCount})` : ""}
+              </Text>
             </TouchableOpacity>
             <TouchableOpacity
               onPress={handlePayAndClose}
-              disabled={order.items.length === 0}
+              disabled={order.kots.length === 0}
               style={[
                 styles.payBtn,
-                { backgroundColor: order.items.length === 0 ? colors.muted : colors.primary },
+                { backgroundColor: order.kots.length === 0 ? colors.muted : colors.primary },
               ]}
               activeOpacity={0.85}
             >
-              <Feather name="credit-card" size={18} color={order.items.length === 0 ? colors.mutedForeground : "#fff"} />
-              <Text style={[styles.payBtnText, { color: order.items.length === 0 ? colors.mutedForeground : "#fff" }]}>
+              <Feather
+                name="credit-card"
+                size={18}
+                color={order.kots.length === 0 ? colors.mutedForeground : "#fff"}
+              />
+              <Text
+                style={[
+                  styles.payBtnText,
+                  { color: order.kots.length === 0 ? colors.mutedForeground : "#fff" },
+                ]}
+              >
                 Pay ${total.toFixed(2)}
               </Text>
             </TouchableOpacity>
@@ -450,7 +571,7 @@ export default function TableDetailScreen() {
             />
             <Text style={[styles.inputLabel, { color: colors.foreground, marginTop: 16 }]}>
               Customer Mobile{" "}
-              <Text style={[{ color: colors.mutedForeground, fontFamily: "Inter_400Regular", fontSize: 12 }]}>(optional)</Text>
+              <Text style={{ color: colors.mutedForeground, fontFamily: "Inter_400Regular", fontSize: 12 }}>(optional)</Text>
             </Text>
             <TextInput
               value={customerMobile}
@@ -515,7 +636,6 @@ export default function TableDetailScreen() {
             <View style={{ width: 22 }} />
           </View>
 
-          {/* Search bar — only when not in open item mode */}
           {!showOpenItem && (
             <View style={[styles.searchBar, { backgroundColor: colors.muted, borderBottomColor: colors.border }]}>
               <Feather name="search" size={16} color={colors.mutedForeground} style={{ marginRight: 8 }} />
@@ -536,7 +656,6 @@ export default function TableDetailScreen() {
             </View>
           )}
 
-          {/* Category tabs — only show when not searching and not in open item mode */}
           {!menuSearch.trim() && (
             <ScrollView
               horizontal
@@ -560,7 +679,6 @@ export default function TableDetailScreen() {
                   </Text>
                 </TouchableOpacity>
               ))}
-              {/* Open Item special tab */}
               <TouchableOpacity
                 onPress={() => { setShowOpenItem(true); setMenuSearch(""); }}
                 style={[
@@ -572,9 +690,7 @@ export default function TableDetailScreen() {
                 ]}
               >
                 <Feather name="edit-3" size={12} color={showOpenItem ? "#fff" : "#8E44AD"} />
-                <Text style={[styles.catText, { color: showOpenItem ? "#fff" : "#8E44AD" }]}>
-                  Open Item
-                </Text>
+                <Text style={[styles.catText, { color: showOpenItem ? "#fff" : "#8E44AD" }]}>Open Item</Text>
               </TouchableOpacity>
             </ScrollView>
           )}
@@ -626,9 +742,7 @@ export default function TableDetailScreen() {
                       activeOpacity={0.8}
                     >
                       <Text style={styles.openCatEmoji}>{cat.emoji}</Text>
-                      <Text style={[styles.openCatText, { color: selected ? "#fff" : cat.color }]}>
-                        {cat.label}
-                      </Text>
+                      <Text style={[styles.openCatText, { color: selected ? "#fff" : cat.color }]}>{cat.label}</Text>
                     </TouchableOpacity>
                   );
                 })}
@@ -668,11 +782,9 @@ export default function TableDetailScreen() {
 
               {openItemName.trim() && openItemPrice && (
                 <View style={[styles.openItemPreview, { backgroundColor: openItemCategory.color + "12", borderColor: openItemCategory.color + "44" }]}>
-                  <Text style={[styles.openItemPreviewEmoji]}>{openItemCategory.emoji}</Text>
+                  <Text style={styles.openItemPreviewEmoji}>{openItemCategory.emoji}</Text>
                   <View style={{ flex: 1 }}>
-                    <Text style={[styles.openItemPreviewName, { color: colors.foreground }]}>
-                      {openItemName.trim()}
-                    </Text>
+                    <Text style={[styles.openItemPreviewName, { color: colors.foreground }]}>{openItemName.trim()}</Text>
                     <Text style={[styles.openItemPreviewMeta, { color: colors.mutedForeground }]}>
                       {openItemCategory.label} · x{openItemQty} · ${(parseFloat(openItemPrice || "0") * openItemQty).toFixed(2)}
                     </Text>
@@ -682,15 +794,12 @@ export default function TableDetailScreen() {
 
               <TouchableOpacity
                 onPress={handleAddOpenItem}
-                style={[
-                  styles.openItemAddBtn,
-                  { backgroundColor: openItemCategory.color },
-                ]}
+                style={[styles.openItemAddBtn, { backgroundColor: openItemCategory.color }]}
                 activeOpacity={0.85}
               >
                 <Feather name="plus-circle" size={18} color="#fff" />
                 <Text style={styles.openItemAddBtnText}>
-                  Add to Order · {openItemQty}x ${(parseFloat(openItemPrice || "0") * openItemQty).toFixed(2)}
+                  Add to Cart · {openItemQty}x ${(parseFloat(openItemPrice || "0") * openItemQty).toFixed(2)}
                 </Text>
               </TouchableOpacity>
             </ScrollView>
@@ -698,23 +807,43 @@ export default function TableDetailScreen() {
             <FlatList
               data={filteredMenu}
               keyExtractor={(item) => item.id}
-              contentContainerStyle={styles.menuList}
-              renderItem={({ item }) => <MenuItemCard item={item} onAdd={handleAddItem} />}
+              contentContainerStyle={[styles.menuList, { paddingBottom: cartCount > 0 ? 100 : 20 }]}
+              renderItem={({ item }) => <MenuItemCard item={item} onAdd={addToCart} />}
               ListEmptyComponent={
                 <View style={styles.emptyOrder}>
                   <Feather name="search" size={32} color={colors.mutedForeground} />
-                  <Text style={[styles.emptyOrderText, { color: colors.mutedForeground }]}>
-                    No items match your search
-                  </Text>
+                  <Text style={[styles.emptyOrderText, { color: colors.mutedForeground }]}>No items match your search</Text>
                 </View>
               }
               keyboardShouldPersistTaps="handled"
             />
           )}
+
+          {/* Cart footer inside menu modal */}
+          {cartCount > 0 && (
+            <View style={[styles.cartFooter, { backgroundColor: colors.card, borderTopColor: colors.border }]}>
+              <View style={styles.cartFooterLeft}>
+                <View style={[styles.cartCountBadge, { backgroundColor: "#E67E22" }]}>
+                  <Text style={styles.cartCountText}>{cartCount}</Text>
+                </View>
+                <Text style={[styles.cartFooterMeta, { color: colors.foreground }]}>
+                  item{cartCount !== 1 ? "s" : ""} · ${cartTotal.toFixed(2)}
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={handlePlaceKOT}
+                style={[styles.placeKOTLargeBtn, { backgroundColor: "#E67E22" }]}
+                activeOpacity={0.85}
+              >
+                <Feather name="send" size={16} color="#fff" />
+                <Text style={styles.placeKOTLargeText}>Place KOT</Text>
+              </TouchableOpacity>
+            </View>
+          )}
         </View>
       </Modal>
 
-      {/* ── TRANSFER TYPE SELECTION MODAL ── */}
+      {/* ── TRANSFER MODAL ── */}
       <Modal
         visible={showTransferTypeModal}
         animationType="slide"
@@ -734,109 +863,106 @@ export default function TableDetailScreen() {
 
           <ScrollView contentContainerStyle={styles.modalContent} keyboardShouldPersistTaps="handled">
 
-            {/* Step 1: Pick transfer type */}
+            {/* Step 1: pick transfer type */}
             {!selectedTransferType && (
               <>
-                <Text style={[styles.stepLabel, { color: colors.foreground }]}>
-                  Select transfer type
-                </Text>
+                <Text style={[styles.stepLabel, { color: colors.foreground }]}>Select transfer type</Text>
                 <TransferTypeOption
                   icon="shuffle"
                   title="Table Transfer"
-                  subtitle="Move entire order (all items) to another available table"
+                  subtitle="Move entire order (all KOTs) to another available table"
                   color={colors.primary}
                   onPress={() => setSelectedTransferType("table")}
                 />
                 <TransferTypeOption
                   icon="send"
                   title="KOT Transfer"
-                  subtitle={`Move all active order items (${kotItems.length}) to another table`}
+                  subtitle={`Move all placed items (${allPlacedItems.length}) to another table as a new KOT`}
                   color="#E67E22"
                   onPress={() => {
-                    if (kotItems.length === 0) {
-                      Alert.alert("No Active Items", "There are no active items to transfer via KOT.");
+                    if (allPlacedItems.length === 0) {
+                      Alert.alert("No Placed Items", "There are no placed KOT items to transfer.");
                       return;
                     }
                     setSelectedTransferType("kot");
                   }}
-                  disabled={kotItems.length === 0}
+                  disabled={allPlacedItems.length === 0}
                 />
                 <TransferTypeOption
                   icon="list"
                   title="Item Transfer"
-                  subtitle="Select specific items to move to another table"
+                  subtitle="Select specific items from any KOT to move to another table"
                   color="#27AE60"
                   onPress={() => setSelectedTransferType("items")}
+                  disabled={allPlacedItems.length === 0}
                 />
               </>
             )}
 
-            {/* Step 2 for "items": pick items */}
+            {/* Item transfer: select items */}
             {selectedTransferType === "items" && !transferTo && (
               <>
                 <TouchableOpacity onPress={() => setSelectedTransferType(null)} style={styles.backRow}>
                   <Feather name="arrow-left" size={14} color={colors.mutedForeground} />
                   <Text style={[styles.backRowText, { color: colors.mutedForeground }]}>Change type</Text>
                 </TouchableOpacity>
-                <Text style={[styles.stepLabel, { color: colors.foreground }]}>
-                  Select items to transfer
-                </Text>
-                {order?.items.map((item, index) => {
-                  const selected = selectedItemIndices.includes(index);
-                  return (
-                    <TouchableOpacity
-                      key={index}
-                      onPress={() => toggleItemSelection(index)}
-                      style={[
-                        styles.itemPickerRow,
-                        {
-                          backgroundColor: selected ? "#27AE6018" : colors.card,
-                          borderColor: selected ? "#27AE60" : colors.border,
-                        },
-                      ]}
-                    >
-                      <View style={[styles.checkbox, { borderColor: selected ? "#27AE60" : colors.border, backgroundColor: selected ? "#27AE60" : "transparent" }]}>
-                        {selected && <Feather name="check" size={12} color="#fff" />}
-                      </View>
-                      <Text style={[styles.itemPickerEmoji]}>{item.menuItem.emoji}</Text>
-                      <View style={{ flex: 1 }}>
-                        <Text style={[styles.itemPickerName, { color: colors.foreground }]}>
-                          {item.menuItem.name}
-                        </Text>
-                        <Text style={[styles.itemPickerMeta, { color: colors.mutedForeground }]}>
-                          x{item.quantity} · ${(item.menuItem.price * item.quantity).toFixed(2)}
-                        </Text>
-                      </View>
-                    </TouchableOpacity>
-                  );
-                })}
-                {selectedItemIndices.length > 0 && (
+                <Text style={[styles.stepLabel, { color: colors.foreground }]}>Select items to transfer</Text>
+                {order?.kots.map((kot) => (
+                  <View key={kot.id} style={{ marginBottom: 16 }}>
+                    <Text style={[styles.transferKotLabel, { color: colors.mutedForeground }]}>
+                      KOT #{kot.kotNumber} · {formatTime(kot.createdAt)}
+                    </Text>
+                    {kot.items.map((item, itemIdx) => {
+                      const selected = isKOTItemSelected(kot.id, itemIdx);
+                      return (
+                        <TouchableOpacity
+                          key={itemIdx}
+                          onPress={() => toggleKOTItemSelection(kot.id, itemIdx)}
+                          style={[
+                            styles.itemPickerRow,
+                            {
+                              backgroundColor: selected ? "#27AE6018" : colors.card,
+                              borderColor: selected ? "#27AE60" : colors.border,
+                            },
+                          ]}
+                        >
+                          <View style={[styles.checkbox, { borderColor: selected ? "#27AE60" : colors.border, backgroundColor: selected ? "#27AE60" : "transparent" }]}>
+                            {selected && <Feather name="check" size={12} color="#fff" />}
+                          </View>
+                          <Text style={styles.itemPickerEmoji}>{item.menuItem.emoji}</Text>
+                          <View style={{ flex: 1 }}>
+                            <Text style={[styles.itemPickerName, { color: colors.foreground }]}>{item.menuItem.name}</Text>
+                            <Text style={[styles.itemPickerMeta, { color: colors.mutedForeground }]}>
+                              x{item.quantity} · ${(item.menuItem.price * item.quantity).toFixed(2)}
+                            </Text>
+                          </View>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                ))}
+                {selectedKOTItems.length > 0 && (
                   <TouchableOpacity
-                    onPress={() => {
-                      // proceed to table selection step
-                      setTransferTo(null);
-                    }}
-                    style={[styles.confirmBtn, { backgroundColor: "#27AE60", marginTop: 20 }]}
+                    onPress={() => setTransferTo(null)}
+                    style={[styles.confirmBtn, { backgroundColor: "#27AE60", marginTop: 8 }]}
                     activeOpacity={0.85}
                   >
                     <Text style={styles.confirmBtnText}>
-                      Select Destination Table ({selectedItemIndices.length} items)
+                      Select Destination Table ({selectedKOTItems.length} item{selectedKOTItems.length !== 1 ? "s" : ""})
                     </Text>
                   </TouchableOpacity>
                 )}
               </>
             )}
 
-            {/* Step 2 for table/kot: pick target table */}
-            {selectedTransferType && (selectedTransferType !== "items" || (selectedTransferType === "items" && selectedItemIndices.length > 0)) && !transferTo && selectedTransferType !== "items" && (
+            {/* Table / KOT transfer: pick target table */}
+            {selectedTransferType && selectedTransferType !== "items" && !transferTo && (
               <>
                 <TouchableOpacity onPress={() => setSelectedTransferType(null)} style={styles.backRow}>
                   <Feather name="arrow-left" size={14} color={colors.mutedForeground} />
                   <Text style={[styles.backRowText, { color: colors.mutedForeground }]}>Change type</Text>
                 </TouchableOpacity>
-                <Text style={[styles.stepLabel, { color: colors.foreground }]}>
-                  Select destination table
-                </Text>
+                <Text style={[styles.stepLabel, { color: colors.foreground }]}>Select destination table</Text>
                 {transferTargetTables.length === 0 ? (
                   <Text style={[styles.hintText, { color: colors.mutedForeground }]}>No available tables.</Text>
                 ) : (
@@ -847,17 +973,10 @@ export default function TableDetailScreen() {
                         <TouchableOpacity
                           key={t.id}
                           onPress={() => setTransferTo(t)}
-                          style={[
-                            styles.pickerChip,
-                            { backgroundColor: sc.bg, borderColor: sc.color + "88" },
-                          ]}
+                          style={[styles.pickerChip, { backgroundColor: sc.bg, borderColor: sc.color + "88" }]}
                         >
-                          <Text style={[styles.pickerChipText, { color: sc.color }]}>
-                            {getTableDisplayName(t)}
-                          </Text>
-                          <Text style={[styles.pickerChipSub, { color: sc.color + "99" }]}>
-                            {t.status}
-                          </Text>
+                          <Text style={[styles.pickerChipText, { color: sc.color }]}>{getTableDisplayName(t)}</Text>
+                          <Text style={[styles.pickerChipSub, { color: sc.color + "99" }]}>{t.status}</Text>
                         </TouchableOpacity>
                       );
                     })}
@@ -866,16 +985,14 @@ export default function TableDetailScreen() {
               </>
             )}
 
-            {/* Item transfer: table picker step */}
-            {selectedTransferType === "items" && selectedItemIndices.length > 0 && !transferTo && (
+            {/* Item transfer: pick target table */}
+            {selectedTransferType === "items" && selectedKOTItems.length > 0 && !transferTo && (
               <>
-                <TouchableOpacity onPress={() => setSelectedItemIndices([])} style={styles.backRow}>
+                <TouchableOpacity onPress={() => setSelectedKOTItems([])} style={styles.backRow}>
                   <Feather name="arrow-left" size={14} color={colors.mutedForeground} />
                   <Text style={[styles.backRowText, { color: colors.mutedForeground }]}>Change items</Text>
                 </TouchableOpacity>
-                <Text style={[styles.stepLabel, { color: colors.foreground }]}>
-                  Select destination table
-                </Text>
+                <Text style={[styles.stepLabel, { color: colors.foreground }]}>Select destination table</Text>
                 {anyTables.length === 0 ? (
                   <Text style={[styles.hintText, { color: colors.mutedForeground }]}>No tables available.</Text>
                 ) : (
@@ -886,17 +1003,10 @@ export default function TableDetailScreen() {
                         <TouchableOpacity
                           key={t.id}
                           onPress={() => setTransferTo(t)}
-                          style={[
-                            styles.pickerChip,
-                            { backgroundColor: sc.bg, borderColor: sc.color + "88" },
-                          ]}
+                          style={[styles.pickerChip, { backgroundColor: sc.bg, borderColor: sc.color + "88" }]}
                         >
-                          <Text style={[styles.pickerChipText, { color: sc.color }]}>
-                            {getTableDisplayName(t)}
-                          </Text>
-                          <Text style={[styles.pickerChipSub, { color: sc.color + "99" }]}>
-                            {t.status}
-                          </Text>
+                          <Text style={[styles.pickerChipText, { color: sc.color }]}>{getTableDisplayName(t)}</Text>
+                          <Text style={[styles.pickerChipSub, { color: sc.color + "99" }]}>{t.status}</Text>
                         </TouchableOpacity>
                       );
                     })}
@@ -905,19 +1015,18 @@ export default function TableDetailScreen() {
               </>
             )}
 
-            {/* Step 3: Confirm */}
+            {/* Confirm */}
             {selectedTransferType && transferTo && (
               <>
                 <TouchableOpacity onPress={() => setTransferTo(null)} style={styles.backRow}>
                   <Feather name="arrow-left" size={14} color={colors.mutedForeground} />
                   <Text style={[styles.backRowText, { color: colors.mutedForeground }]}>Change table</Text>
                 </TouchableOpacity>
-
                 <View style={[styles.transferSummary, { backgroundColor: colors.card, borderColor: colors.border }]}>
                   <Text style={[styles.summaryLabel, { color: colors.mutedForeground }]}>
                     {selectedTransferType === "table" && "Table Transfer"}
-                    {selectedTransferType === "kot" && `KOT Transfer · ${kotItems.length} items`}
-                    {selectedTransferType === "items" && `Item Transfer · ${selectedItemIndices.length} item${selectedItemIndices.length !== 1 ? "s" : ""}`}
+                    {selectedTransferType === "kot" && `KOT Transfer · ${allPlacedItems.length} items`}
+                    {selectedTransferType === "items" && `Item Transfer · ${selectedKOTItems.length} item${selectedKOTItems.length !== 1 ? "s" : ""}`}
                   </Text>
                   <View style={styles.transferRow}>
                     <View style={[styles.transferChip, { backgroundColor: colors.primary + "20" }]}>
@@ -931,7 +1040,6 @@ export default function TableDetailScreen() {
                     </View>
                   </View>
                 </View>
-
                 <TouchableOpacity
                   onPress={handleTransferConfirm}
                   style={[styles.confirmBtn, { backgroundColor: colors.primary }]}
@@ -950,12 +1058,7 @@ export default function TableDetailScreen() {
 }
 
 function TransferTypeOption({
-  icon,
-  title,
-  subtitle,
-  color,
-  onPress,
-  disabled,
+  icon, title, subtitle, color, onPress, disabled,
 }: {
   icon: keyof typeof Feather.glyphMap;
   title: string;
@@ -986,9 +1089,7 @@ function TransferTypeOption({
         <Text style={[styles.transferTypeTitle, { color: disabled ? colors.mutedForeground : colors.foreground }]}>
           {title}
         </Text>
-        <Text style={[styles.transferTypeSub, { color: colors.mutedForeground }]}>
-          {subtitle}
-        </Text>
+        <Text style={[styles.transferTypeSub, { color: colors.mutedForeground }]}>{subtitle}</Text>
       </View>
       {!disabled && <Feather name="chevron-right" size={18} color={color} />}
     </TouchableOpacity>
@@ -1012,249 +1113,188 @@ const styles = StyleSheet.create({
   headerSub: { fontSize: 12, fontFamily: "Inter_400Regular", marginTop: 1 },
   headerRight: { flexDirection: "row", gap: 6 },
   headerIconBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    alignItems: "center",
-    justifyContent: "center",
+    width: 36, height: 36, borderRadius: 10,
+    alignItems: "center", justifyContent: "center",
   },
   emptyState: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 32,
-    gap: 8,
+    flex: 1, alignItems: "center", justifyContent: "center",
+    paddingHorizontal: 32, gap: 8,
   },
   emptyTitle: { fontSize: 20, fontFamily: "Inter_700Bold", textAlign: "center" },
   emptyText: { fontSize: 14, fontFamily: "Inter_400Regular", textAlign: "center", lineHeight: 20 },
   startBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    marginTop: 20,
-    paddingHorizontal: 24,
-    paddingVertical: 14,
-    borderRadius: 14,
+    flexDirection: "row", alignItems: "center", gap: 8,
+    marginTop: 20, paddingHorizontal: 24, paddingVertical: 14, borderRadius: 14,
   },
   startBtnText: { fontSize: 16, fontFamily: "Inter_600SemiBold", color: "#fff" },
   orderMeta: {
-    flexDirection: "row",
-    justifyContent: "space-around",
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    flexWrap: "wrap",
-    rowGap: 6,
-    paddingHorizontal: 8,
+    flexDirection: "row", justifyContent: "space-around",
+    paddingVertical: 12, borderBottomWidth: 1,
+    flexWrap: "wrap", rowGap: 6, paddingHorizontal: 8,
   },
   metaLabel: { fontSize: 10, fontFamily: "Inter_400Regular", marginBottom: 3, textTransform: "uppercase" },
   metaValue: { fontSize: 14, fontFamily: "Inter_700Bold" },
-  sectionTitle: {
-    fontSize: 11,
-    fontFamily: "Inter_600SemiBold",
-    letterSpacing: 0.8,
-    marginBottom: 10,
-    textTransform: "uppercase",
+  itemsList: { padding: 14, gap: 0 },
+  // KOT sections
+  kotSection: {
+    borderWidth: 1.5,
+    borderRadius: 14,
+    overflow: "hidden",
+    marginBottom: 14,
   },
-  itemsList: { padding: 16 },
+  kotHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 8,
+  },
+  kotHeaderLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flex: 1,
+    flexWrap: "wrap",
+  },
+  kotBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  kotBadgeText: { fontSize: 11, fontFamily: "Inter_700Bold", color: "#fff" },
+  kotMeta: { fontSize: 11, fontFamily: "Inter_400Regular" },
+  placeKOTBtn: {
+    flexDirection: "row", alignItems: "center", gap: 5,
+    backgroundColor: "#E67E22",
+    paddingHorizontal: 10, paddingVertical: 7, borderRadius: 10,
+  },
+  placeKOTText: { fontSize: 12, fontFamily: "Inter_700Bold", color: "#fff" },
   emptyOrder: { alignItems: "center", paddingTop: 40, gap: 12 },
   emptyOrderText: { fontSize: 14, fontFamily: "Inter_400Regular", textAlign: "center" },
   actionBar: {
-    position: "absolute",
-    bottom: 0,
-    left: 0,
-    right: 0,
-    flexDirection: "row",
-    gap: 10,
-    paddingHorizontal: 16,
-    paddingTop: 14,
-    borderTopWidth: 1,
+    position: "absolute", bottom: 0, left: 0, right: 0,
+    flexDirection: "row", gap: 10,
+    paddingHorizontal: 16, paddingTop: 14, borderTopWidth: 1,
   },
   addBtn: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    paddingVertical: 14,
-    borderRadius: 14,
+    flex: 1, flexDirection: "row", alignItems: "center",
+    justifyContent: "center", gap: 8, paddingVertical: 14, borderRadius: 14,
   },
   addBtnText: { fontSize: 15, fontFamily: "Inter_600SemiBold", color: "#fff" },
   payBtn: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    paddingVertical: 14,
-    borderRadius: 14,
+    flex: 1, flexDirection: "row", alignItems: "center",
+    justifyContent: "center", gap: 8, paddingVertical: 14, borderRadius: 14,
   },
   payBtnText: { fontSize: 15, fontFamily: "Inter_600SemiBold" },
   modalContainer: { flex: 1 },
   modalHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderBottomWidth: 1,
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1,
   },
   modalTitle: { fontSize: 16, fontFamily: "Inter_700Bold" },
   modalContent: { padding: 20, paddingBottom: 40 },
   inputLabel: { fontSize: 14, fontFamily: "Inter_600SemiBold", marginBottom: 8 },
   input: {
-    borderWidth: 1,
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 16,
-    fontFamily: "Inter_400Regular",
+    borderWidth: 1, borderRadius: 12,
+    paddingHorizontal: 14, paddingVertical: 12,
+    fontSize: 16, fontFamily: "Inter_400Regular",
   },
   guestRow: { flexDirection: "row", gap: 8, flexWrap: "wrap" },
   guestChip: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
-    borderWidth: 1,
-    alignItems: "center",
-    justifyContent: "center",
+    width: 44, height: 44, borderRadius: 12, borderWidth: 1,
+    alignItems: "center", justifyContent: "center",
   },
   guestChipText: { fontSize: 16, fontFamily: "Inter_600SemiBold" },
   guestInput: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
-    borderWidth: 1,
-    textAlign: "center",
-    fontSize: 16,
-    fontFamily: "Inter_600SemiBold",
+    width: 44, height: 44, borderRadius: 12, borderWidth: 1,
+    textAlign: "center", fontSize: 16, fontFamily: "Inter_600SemiBold",
   },
   confirmBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    paddingVertical: 14,
-    borderRadius: 14,
-    marginTop: 28,
+    flexDirection: "row", alignItems: "center", justifyContent: "center",
+    gap: 8, paddingVertical: 14, borderRadius: 14, marginTop: 28,
   },
   confirmBtnText: { fontSize: 16, fontFamily: "Inter_700Bold", color: "#fff" },
   // Menu
   searchBar: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderBottomWidth: 1,
+    flexDirection: "row", alignItems: "center",
+    paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1,
   },
-  searchInput: {
-    flex: 1,
-    fontSize: 15,
-    fontFamily: "Inter_400Regular",
-    paddingVertical: 0,
-  },
-  searchResultsBar: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-  },
-  searchResultCount: {
-    fontSize: 12,
-    fontFamily: "Inter_400Regular",
-  },
+  searchInput: { flex: 1, fontSize: 15, fontFamily: "Inter_400Regular", paddingVertical: 0 },
+  searchResultsBar: { paddingHorizontal: 16, paddingVertical: 8, borderBottomWidth: 1 },
+  searchResultCount: { fontSize: 12, fontFamily: "Inter_400Regular" },
   catScroll: { borderBottomWidth: 1, paddingVertical: 10 },
   catList: { paddingHorizontal: 16, gap: 8 },
   catChip: { paddingHorizontal: 16, paddingVertical: 7, borderRadius: 20 },
   catText: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
   openItemTab: { flexDirection: "row", alignItems: "center", gap: 5 },
   menuList: { padding: 16 },
+  // Cart footer inside menu modal
+  cartFooter: {
+    flexDirection: "row", alignItems: "center",
+    paddingHorizontal: 16, paddingVertical: 12,
+    borderTopWidth: 1, gap: 12,
+  },
+  cartFooterLeft: { flex: 1, flexDirection: "row", alignItems: "center", gap: 10 },
+  cartCountBadge: {
+    width: 28, height: 28, borderRadius: 14,
+    alignItems: "center", justifyContent: "center",
+  },
+  cartCountText: { fontSize: 13, fontFamily: "Inter_700Bold", color: "#fff" },
+  cartFooterMeta: { fontSize: 14, fontFamily: "Inter_600SemiBold" },
+  placeKOTLargeBtn: {
+    flexDirection: "row", alignItems: "center", gap: 8,
+    paddingHorizontal: 20, paddingVertical: 12, borderRadius: 14,
+  },
+  placeKOTLargeText: { fontSize: 15, fontFamily: "Inter_700Bold", color: "#fff" },
+  // Open item form
   openItemContainer: { padding: 20, paddingBottom: 50 },
   openItemBanner: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    padding: 12,
-    borderRadius: 12,
-    borderWidth: 1,
-    marginBottom: 22,
+    flexDirection: "row", alignItems: "center", gap: 10,
+    padding: 12, borderRadius: 12, borderWidth: 1, marginBottom: 22,
   },
   openItemBannerText: { fontSize: 13, fontFamily: "Inter_500Medium", flex: 1, lineHeight: 18 },
   openItemLabel: { fontSize: 14, fontFamily: "Inter_600SemiBold", marginBottom: 10 },
   openItemInput: {
-    borderWidth: 1,
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 13,
-    fontSize: 16,
-    fontFamily: "Inter_400Regular",
+    borderWidth: 1, borderRadius: 12,
+    paddingHorizontal: 14, paddingVertical: 13,
+    fontSize: 16, fontFamily: "Inter_400Regular",
   },
   openCatRow: { flexDirection: "row", gap: 10, flexWrap: "wrap" },
   openCatChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 7,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 12,
-    borderWidth: 1.5,
-    flex: 1,
-    minWidth: 90,
-    justifyContent: "center",
+    flexDirection: "row", alignItems: "center", gap: 7,
+    paddingHorizontal: 16, paddingVertical: 12,
+    borderRadius: 12, borderWidth: 1.5,
+    flex: 1, minWidth: 90, justifyContent: "center",
   },
   openCatEmoji: { fontSize: 18 },
   openCatText: { fontSize: 14, fontFamily: "Inter_700Bold" },
   priceInputRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    borderWidth: 1,
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 4,
+    flexDirection: "row", alignItems: "center",
+    borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 4,
   },
   currencySign: { fontSize: 18, fontFamily: "Inter_600SemiBold", marginRight: 4 },
-  priceInput: {
-    flex: 1,
-    fontSize: 22,
-    fontFamily: "Inter_700Bold",
-    paddingVertical: 8,
-  },
+  priceInput: { flex: 1, fontSize: 22, fontFamily: "Inter_700Bold", paddingVertical: 8 },
   openQtyRow: { flexDirection: "row", alignItems: "center", gap: 12 },
   openQtyBtn: {
-    width: 46,
-    height: 46,
-    borderRadius: 14,
-    borderWidth: 1,
-    alignItems: "center",
-    justifyContent: "center",
+    width: 46, height: 46, borderRadius: 14, borderWidth: 1,
+    alignItems: "center", justifyContent: "center",
   },
   openQtyDisplay: {
-    width: 64,
-    height: 46,
-    borderRadius: 12,
-    borderWidth: 1,
-    alignItems: "center",
-    justifyContent: "center",
+    width: 64, height: 46, borderRadius: 12, borderWidth: 1,
+    alignItems: "center", justifyContent: "center",
   },
   openQtyText: { fontSize: 22, fontFamily: "Inter_700Bold" },
   openItemPreview: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    borderRadius: 12,
-    borderWidth: 1,
-    padding: 14,
-    marginTop: 22,
+    flexDirection: "row", alignItems: "center", gap: 12,
+    borderRadius: 12, borderWidth: 1, padding: 14, marginTop: 22,
   },
   openItemPreviewEmoji: { fontSize: 28 },
   openItemPreviewName: { fontSize: 15, fontFamily: "Inter_700Bold", marginBottom: 3 },
   openItemPreviewMeta: { fontSize: 12, fontFamily: "Inter_400Regular" },
   openItemAddBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 9,
-    paddingVertical: 15,
-    borderRadius: 14,
-    marginTop: 20,
+    flexDirection: "row", alignItems: "center", justifyContent: "center",
+    gap: 9, paddingVertical: 15, borderRadius: 14, marginTop: 20,
   },
   openItemAddBtnText: { fontSize: 16, fontFamily: "Inter_700Bold", color: "#fff" },
   // Transfer
@@ -1263,67 +1303,45 @@ const styles = StyleSheet.create({
   backRow: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 16 },
   backRowText: { fontSize: 13, fontFamily: "Inter_500Medium" },
   transferTypeCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 14,
-    padding: 16,
-    borderRadius: 14,
-    borderWidth: 1.5,
-    marginBottom: 12,
+    flexDirection: "row", alignItems: "center", gap: 14,
+    padding: 16, borderRadius: 14, borderWidth: 1.5, marginBottom: 12,
   },
   transferTypeIcon: {
-    width: 46,
-    height: 46,
-    borderRadius: 12,
-    alignItems: "center",
-    justifyContent: "center",
+    width: 46, height: 46, borderRadius: 12,
+    alignItems: "center", justifyContent: "center",
   },
   transferTypeTitle: { fontSize: 15, fontFamily: "Inter_700Bold", marginBottom: 2 },
   transferTypeSub: { fontSize: 12, fontFamily: "Inter_400Regular", lineHeight: 17 },
+  transferKotLabel: {
+    fontSize: 11, fontFamily: "Inter_600SemiBold",
+    textTransform: "uppercase", letterSpacing: 0.5,
+    marginBottom: 8,
+  },
   tablePickerGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
   pickerChip: {
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 10,
-    borderWidth: 1.5,
-    minWidth: 80,
-    alignItems: "center",
+    paddingHorizontal: 14, paddingVertical: 10,
+    borderRadius: 10, borderWidth: 1.5,
+    minWidth: 80, alignItems: "center",
   },
   pickerChipText: { fontSize: 14, fontFamily: "Inter_700Bold" },
   pickerChipSub: { fontSize: 10, fontFamily: "Inter_400Regular", marginTop: 2, textTransform: "capitalize" },
   itemPickerRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    padding: 12,
-    borderRadius: 12,
-    borderWidth: 1.5,
-    marginBottom: 8,
+    flexDirection: "row", alignItems: "center", gap: 10,
+    padding: 12, borderRadius: 12, borderWidth: 1.5, marginBottom: 8,
   },
   checkbox: {
-    width: 22,
-    height: 22,
-    borderRadius: 6,
-    borderWidth: 2,
-    alignItems: "center",
-    justifyContent: "center",
+    width: 22, height: 22, borderRadius: 6, borderWidth: 2,
+    alignItems: "center", justifyContent: "center",
   },
   itemPickerEmoji: { fontSize: 22 },
   itemPickerName: { fontSize: 14, fontFamily: "Inter_600SemiBold" },
   itemPickerMeta: { fontSize: 12, fontFamily: "Inter_400Regular", marginTop: 2 },
   transferSummary: {
-    borderRadius: 12,
-    borderWidth: 1,
-    padding: 16,
-    marginBottom: 4,
-    gap: 12,
+    borderRadius: 12, borderWidth: 1, padding: 16, marginBottom: 4, gap: 12,
   },
   summaryLabel: { fontSize: 12, fontFamily: "Inter_600SemiBold", textTransform: "uppercase", letterSpacing: 0.5 },
   transferRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 12,
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 12,
   },
   transferChip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10 },
   transferChipText: { fontSize: 15, fontFamily: "Inter_700Bold" },

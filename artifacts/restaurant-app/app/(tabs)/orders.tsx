@@ -12,15 +12,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRestaurant } from "@/context/RestaurantContext";
 import { useColors } from "@/hooks/useColors";
-import { Order, OrderStatus } from "@/context/RestaurantContext";
-
-const STATUS_COLORS: Record<OrderStatus, string> = {
-  pending: "#7A7068",
-  preparing: "#E67E22",
-  ready: "#27AE60",
-  served: "#2980B9",
-  paid: "#9B59B6",
-};
+import { Order } from "@/context/RestaurantContext";
 
 function timeAgo(dateStr: string) {
   const diff = Date.now() - new Date(dateStr).getTime();
@@ -39,63 +31,46 @@ function OrderCard({ order, displayName, total, onPress }: {
   onPress: () => void;
 }) {
   const colors = useColors();
-  const statusColor = STATUS_COLORS[order.status];
-  const pendingCount = order.items.filter(i => i.status === "pending").length;
-  const readyCount = order.items.filter(i => i.status === "ready").length;
+  const allItems = order.kots.flatMap((k) => k.items);
+  const totalQty = allItems.reduce((s, i) => s + i.quantity, 0);
+  const kotCount = order.kots.length;
 
   return (
     <TouchableOpacity
       onPress={onPress}
       activeOpacity={0.85}
-      style={[
-        styles.orderCard,
-        { backgroundColor: colors.card, borderColor: colors.border },
-      ]}
+      style={[styles.orderCard, { backgroundColor: colors.card, borderColor: colors.border }]}
     >
       <View style={styles.cardTop}>
         <View style={styles.tableInfo}>
-          <Text style={[styles.tableNum, { color: colors.foreground }]}>
-            {displayName}
-          </Text>
+          <Text style={[styles.tableNum, { color: colors.foreground }]}>{displayName}</Text>
           <Text style={[styles.server, { color: colors.mutedForeground }]}>
             {order.serverName} · {order.guestCount} guests
           </Text>
         </View>
         <View style={styles.rightInfo}>
-          <Text style={[styles.total, { color: colors.primary }]}>
-            ${total.toFixed(2)}
-          </Text>
-          <Text style={[styles.time, { color: colors.mutedForeground }]}>
-            {timeAgo(order.createdAt)}
-          </Text>
+          <Text style={[styles.total, { color: colors.primary }]}>${total.toFixed(2)}</Text>
+          <Text style={[styles.time, { color: colors.mutedForeground }]}>{timeAgo(order.createdAt)}</Text>
         </View>
       </View>
 
       <View style={styles.cardBottom}>
-        <View style={[styles.statusBadge, { backgroundColor: statusColor + "20" }]}>
-          <Text style={[styles.statusText, { color: statusColor }]}>
-            {order.status.charAt(0).toUpperCase() + order.status.slice(1)}
-          </Text>
-        </View>
-        <View style={styles.itemCounts}>
-          <Text style={[styles.itemCount, { color: colors.mutedForeground }]}>
-            {order.items.length} items
-          </Text>
-          {pendingCount > 0 && (
-            <View style={[styles.alertBadge, { backgroundColor: "#E67E2220" }]}>
-              <Text style={{ color: "#E67E22", fontSize: 11, fontFamily: "Inter_600SemiBold" }}>
-                {pendingCount} pending
+        <View style={styles.kotInfo}>
+          {order.kots.map((kot) => (
+            <View
+              key={kot.id}
+              style={[styles.kotChip, { backgroundColor: colors.primary + "18", borderColor: colors.primary + "44" }]}
+            >
+              <Text style={[styles.kotChipText, { color: colors.primary }]}>KOT #{kot.kotNumber}</Text>
+              <Text style={[styles.kotChipSub, { color: colors.mutedForeground }]}>
+                {kot.items.reduce((s, i) => s + i.quantity, 0)} items
               </Text>
             </View>
-          )}
-          {readyCount > 0 && (
-            <View style={[styles.alertBadge, { backgroundColor: "#27AE6020" }]}>
-              <Text style={{ color: "#27AE60", fontSize: 11, fontFamily: "Inter_600SemiBold" }}>
-                {readyCount} ready
-              </Text>
-            </View>
-          )}
+          ))}
         </View>
+        {kotCount === 0 && (
+          <Text style={[styles.noKotText, { color: colors.mutedForeground }]}>No KOTs placed yet</Text>
+        )}
       </View>
     </TouchableOpacity>
   );
@@ -125,13 +100,9 @@ export default function OrdersScreen() {
           },
         ]}
       >
-        <Text style={[styles.headerTitle, { color: colors.foreground }]}>
-          Live Orders
-        </Text>
+        <Text style={[styles.headerTitle, { color: colors.foreground }]}>Live Orders</Text>
         <View style={[styles.badge, { backgroundColor: colors.primary }]}>
-          <Text style={[styles.badgeText, { color: "#fff" }]}>
-            {activeOrders.length}
-          </Text>
+          <Text style={[styles.badgeText, { color: "#fff" }]}>{activeOrders.length}</Text>
         </View>
       </View>
 
@@ -141,10 +112,9 @@ export default function OrdersScreen() {
         contentContainerStyle={[
           styles.list,
           {
-            paddingBottom:
-              Platform.OS === "web"
-                ? Math.max(insets.bottom, 34) + 84
-                : insets.bottom + 84,
+            paddingBottom: Platform.OS === "web"
+              ? Math.max(insets.bottom, 34) + 84
+              : insets.bottom + 84,
           },
         ]}
         renderItem={({ item }) => {
@@ -155,28 +125,16 @@ export default function OrdersScreen() {
               displayName={table ? getTableDisplayName(table) : "Table"}
               total={getTotalAmount(item.id)}
               onPress={() =>
-                router.push({
-                  pathname: "/table/[id]",
-                  params: { id: item.tableId },
-                })
+                router.push({ pathname: "/table/[id]", params: { id: item.tableId } })
               }
             />
           );
         }}
         ListEmptyComponent={
           <View style={styles.empty}>
-            <Feather
-              name="clipboard"
-              size={48}
-              color={colors.mutedForeground}
-              style={{ marginBottom: 12 }}
-            />
-            <Text style={[styles.emptyTitle, { color: colors.foreground }]}>
-              No active orders
-            </Text>
-            <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>
-              All tables are clear right now
-            </Text>
+            <Feather name="clipboard" size={48} color={colors.mutedForeground} style={{ marginBottom: 12 }} />
+            <Text style={[styles.emptyTitle, { color: colors.foreground }]}>No active orders</Text>
+            <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>All tables are clear right now</Text>
           </View>
         }
       />
@@ -187,62 +145,35 @@ export default function OrdersScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   header: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    paddingHorizontal: 16,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
+    flexDirection: "row", alignItems: "center", gap: 10,
+    paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: 1,
   },
-  headerTitle: {
-    fontSize: 26,
-    fontFamily: "Inter_700Bold",
-  },
+  headerTitle: { fontSize: 26, fontFamily: "Inter_700Bold" },
   badge: {
-    minWidth: 26,
-    height: 26,
-    borderRadius: 13,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 8,
+    minWidth: 26, height: 26, borderRadius: 13,
+    alignItems: "center", justifyContent: "center", paddingHorizontal: 8,
   },
   badgeText: { fontSize: 13, fontFamily: "Inter_700Bold" },
   list: { padding: 16, gap: 12 },
-  orderCard: {
-    borderRadius: 14,
-    borderWidth: 1,
-    padding: 14,
-  },
-  cardTop: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginBottom: 10,
-  },
+  orderCard: { borderRadius: 14, borderWidth: 1, padding: 14 },
+  cardTop: { flexDirection: "row", justifyContent: "space-between", marginBottom: 12 },
   tableInfo: { flex: 1 },
   tableNum: { fontSize: 17, fontFamily: "Inter_700Bold" },
   server: { fontSize: 12, fontFamily: "Inter_400Regular", marginTop: 2 },
   rightInfo: { alignItems: "flex-end" },
   total: { fontSize: 16, fontFamily: "Inter_700Bold" },
   time: { fontSize: 11, fontFamily: "Inter_400Regular", marginTop: 2 },
-  cardBottom: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
+  cardBottom: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
+  kotInfo: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
+  kotChip: {
+    flexDirection: "row", alignItems: "center", gap: 5,
+    paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10, borderWidth: 1,
   },
-  statusBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 20,
-  },
-  statusText: { fontSize: 12, fontFamily: "Inter_600SemiBold" },
-  itemCounts: { flexDirection: "row", gap: 6, alignItems: "center" },
-  itemCount: { fontSize: 12, fontFamily: "Inter_400Regular" },
-  alertBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 12 },
+  kotChipText: { fontSize: 11, fontFamily: "Inter_700Bold" },
+  kotChipSub: { fontSize: 10, fontFamily: "Inter_400Regular" },
+  noKotText: { fontSize: 12, fontFamily: "Inter_400Regular", fontStyle: "italic" },
   empty: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingTop: 100,
+    flex: 1, alignItems: "center", justifyContent: "center", paddingTop: 100,
   },
   emptyTitle: { fontSize: 17, fontFamily: "Inter_700Bold", marginBottom: 6 },
   emptyText: { fontSize: 14, fontFamily: "Inter_400Regular" },
